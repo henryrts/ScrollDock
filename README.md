@@ -4,9 +4,9 @@ ScrollDock is an offline Android accessibility app that adds a movable navigatio
 
 ## Version
 
-Current app version: **0.2.0**
+Current app version: **0.2.1**
 
-GitHub Actions reads `versionName` from `app/build.gradle.kts` and publishes the matching file name, such as `ScrollDock-v0.2.0.apk`.
+GitHub Actions reads `versionName` from `app/build.gradle.kts` and publishes the matching file name, such as `ScrollDock-v0.2.1.apk`.
 
 ## Controls
 
@@ -60,6 +60,42 @@ Profiles independently store:
 
 See [PRIVACY.md](PRIVACY.md) for the complete privacy statement.
 
+## Install and enable from an APK
+
+Android can block sensitive settings for apps installed from an APK. ScrollDock now opens a dedicated setup screen until its accessibility service is enabled.
+
+1. Install the APK and open ScrollDock.
+2. Accept the accessibility disclosure.
+3. If Android displays **Restricted setting**, tap **Close**.
+4. Open **Settings > Apps > ScrollDock**. Alternatively, hold the ScrollDock icon and tap **App info**.
+5. Tap the **three-dot menu** in the upper-right.
+6. Select **Allow restricted settings** and confirm with your PIN or fingerprint.
+7. Open **Settings > Accessibility > Installed apps > ScrollDock**.
+8. Turn the service on and tap **Allow**.
+9. Choose ChatGPT or other apps inside ScrollDock.
+10. Open the local test page before testing third-party apps.
+11. For an app with multiple scrollable panes, long-press the handle and choose **Choose scroll area**.
+
+Only allow restricted settings when you trust the APK source. ScrollDock cannot enable or bypass this Android protection itself.
+
+## Why an APK update may not install over the old app
+
+This is normally a signing-key problem, not an Android 16 problem. Android accepts an update only when:
+
+- the package name is unchanged
+- the new `versionCode` is higher or equal as allowed by the installer
+- the update is signed by the same certificate as the installed app, or by a valid rotated key
+
+A fresh GitHub Actions runner normally creates a new debug signing key. APKs produced by separate runs can therefore look like different developers to Android, even though both files are named ScrollDock. Android then refuses the update and requires the old app to be uninstalled.
+
+The workflow now supports a persistent release key stored in GitHub Actions secrets. Once that key is configured:
+
+1. Uninstall the previously debug-signed ScrollDock one final time.
+2. Install the first persistently signed APK.
+3. Later APKs signed with the same key and a higher `versionCode` can install over it without clearing the app first.
+
+Without the signing secrets, CI still produces a debug APK for testing, but in-place updates are not guaranteed. See [docs/SIGNING.md](docs/SIGNING.md).
+
 ## Build
 
 Requirements:
@@ -73,19 +109,11 @@ Requirements:
 gradle testDebugUnitTest assembleDebug
 ```
 
-The local debug APK is generated at `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions copies it to a version-matched artifact name.
-
-## Enable
-
-1. Install the APK.
-2. Open ScrollDock and accept the accessibility disclosure.
-3. Enable **ScrollDock navigation** in Android Accessibility settings.
-4. Choose ChatGPT or other launcher apps.
-5. Open the local test page before testing third-party apps.
-6. For an app with multiple scrollable panes, long-press the handle and choose **Choose scroll area**.
+The local debug APK is generated at `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions copies the selected debug or signed release build to a version-matched artifact name and publishes a separate certificate report.
 
 ## Architecture
 
+- `SetupActivity`: disclosure, sideloaded-app restricted-settings guidance, and accessibility setup gate.
 - `ScrollAccessibilityService`: foreground scope, lifecycle, correlated scroll observations, temporary-hide restoration.
 - `OverlayController`: accessibility overlay, drag, target picker, message controls, feedback.
 - `ScrollableNodeResolver`: structural candidate scoring, locked-target recovery, node snapshots.
