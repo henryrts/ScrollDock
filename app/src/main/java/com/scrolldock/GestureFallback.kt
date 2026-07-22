@@ -6,10 +6,7 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityWindowInfo
 
-class GestureFallback(
-    private val service: ScrollAccessibilityService,
-    private val prefs: Prefs,
-) {
+class GestureFallback(private val service: ScrollAccessibilityService) {
     fun dispatch(direction: ScrollDirection, completion: (Boolean) -> Unit) {
         val bounds = service.availableAppBounds()
         val overlay = service.overlayBounds()
@@ -21,7 +18,7 @@ class GestureFallback(
             return
         }
 
-        val fraction = prefs.pagePercent / 100f
+        val fraction = service.currentProfile().pagePercent / 100f
         val distance = (usable * fraction).coerceAtMost((usable - service.dp(40)).toFloat())
         var x = bounds.centerX().toFloat()
         if (overlay != null && overlay.contains(x.toInt(), bounds.centerY())) {
