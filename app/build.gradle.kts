@@ -4,7 +4,7 @@ plugins {
 
 android {
     namespace = "com.scrolldock"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.scrolldock"
