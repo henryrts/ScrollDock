@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ScrollDock</string>
+    <string name="service_name">ScrollDock navigation</string>
+    <string name="accessibility_service_description">Shows user-controlled Page Up, Page Down, Top and Bottom controls in selected apps. Screen text is never stored or transmitted.</string>
+    <string name="top">Top</string>
+    <string name="page_up">Page up</string>
+    <string name="page_down">Page down</string>
+    <string name="bottom">Bottom</string>
+    <string name="stop">Stop scrolling</string>
+</resources>
