@@ -22,7 +22,7 @@ class GestureFallback(
         }
 
         val fraction = prefs.pagePercent / 100f
-        val distance = (usable * fraction).coerceAtMost(usable - service.dp(40))
+        val distance = (usable * fraction).coerceAtMost((usable - service.dp(40)).toFloat())
         var x = bounds.centerX().toFloat()
         if (overlay != null && overlay.contains(x.toInt(), bounds.centerY())) {
             x = bounds.left + bounds.width() * 0.35f

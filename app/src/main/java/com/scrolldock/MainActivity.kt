@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.ResolveInfo
 import android.graphics.Color
 import android.net.Uri
@@ -38,12 +39,13 @@ class MainActivity : Activity() {
     }
 
     private fun buildContent(): View {
-        val scroll = ScrollView(this)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(24), dp(20), dp(40))
         }
-        scroll.addView(root, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        val scroll = ScrollView(this).apply {
+            addView(root, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
 
         root.addView(title("ScrollDock"))
         root.addView(body("Persistent Page Up, Page Down, Top and Bottom controls for selected Android apps."))
@@ -51,19 +53,17 @@ class MainActivity : Activity() {
         root.addView(section("Setup"))
         serviceStatus = body("")
         root.addView(serviceStatus)
-        root.addView(actionButton("Open accessibility settings") { openAccessibilitySettings() })
+        root.addView(actionButton("Open accessibility settings", ::openAccessibilitySettings))
 
         selectedAppsStatus = body("")
         root.addView(selectedAppsStatus)
-        root.addView(actionButton("Choose apps") { showAppPicker() })
-
-        val enableSwitch = Switch(this).apply {
+        root.addView(actionButton("Choose apps", ::showAppPicker))
+        root.addView(Switch(this).apply {
             text = "Enable floating controls"
             isChecked = prefs.overlayEnabled
             setPadding(0, dp(10), 0, dp(10))
             setOnCheckedChangeListener { _, checked -> prefs.overlayEnabled = checked }
-        }
-        root.addView(enableSwitch)
+        })
 
         root.addView(section("Controls"))
         root.addView(slider("Button size", 36, 64, prefs.buttonSizeDp) { prefs.buttonSizeDp = it })
@@ -72,33 +72,31 @@ class MainActivity : Activity() {
         root.addView(slider("Repeat interval", 250, 900, prefs.intervalMs.toInt()) { prefs.intervalMs = it.toLong() })
 
         root.addView(section("Test"))
-        root.addView(body("Open a long local page. ScrollDock also permits its own test screen even when only ChatGPT is selected."))
+        root.addView(body("Open a long local page. ScrollDock permits its own test screen even when only ChatGPT is selected."))
         root.addView(actionButton("Open navigation test") {
             startActivity(Intent(this, TestActivity::class.java))
         })
 
         root.addView(section("Privacy"))
-        root.addView(body("Internet permission: Not requested\nScreen recording: Not used\nText storage: None\nAnalytics: None\nAccessibility node text: Never read, logged, or stored\nLocal backup: Disabled"))
+        root.addView(
+            body(
+                "Internet permission: Not requested\n" +
+                    "Screen recording: Not used\n" +
+                    "Text storage: None\n" +
+                    "Analytics: None\n" +
+                    "Accessibility node text: Never read, logged, or stored\n" +
+                    "Local backup: Disabled"
+            )
+        )
         root.addView(actionButton("Review disclosure") { showDisclosure(force = true) })
-        root.addView(actionButton("Clear local settings") {
-            AlertDialog.Builder(this)
-                .setTitle("Clear settings?")
-                .setMessage("This resets consent, selected apps, position, size, and opacity.")
-                .setNegativeButton("Cancel", null)
-                .setPositiveButton("Clear") { _, _ ->
-                    getSharedPreferences("scroll_dock", MODE_PRIVATE).edit().clear().apply()
-                    recreate()
-                }
-                .show()
-        })
+        root.addView(actionButton("Clear local settings", ::confirmClearSettings))
 
         refreshStatus()
         return scroll
     }
 
     private fun refreshStatus() {
-        val enabled = isServiceEnabled()
-        serviceStatus.text = if (enabled) {
+        serviceStatus.text = if (isServiceEnabled()) {
             "Accessibility service: Enabled"
         } else {
             "Accessibility service: Disabled"
@@ -109,7 +107,7 @@ class MainActivity : Activity() {
 
     private fun showDisclosure(force: Boolean = false) {
         if (prefs.consentGranted && !force) return
-        val box = CheckBox(this).apply {
+        val consent = CheckBox(this).apply {
             text = "I understand and agree"
             setPadding(dp(12), dp(8), dp(12), dp(8))
         }
@@ -117,17 +115,18 @@ class MainActivity : Activity() {
             .setTitle("Accessibility disclosure")
             .setMessage(
                 "ScrollDock can observe which selected app is open and interact with scrollable screen elements. " +
-                    "It uses this access only when you press a ScrollDock control. It does not collect, save, or transmit screen text."
+                    "It uses this access only when you press a ScrollDock control. " +
+                    "It does not collect, save, or transmit screen text."
             )
-            .setView(box)
+            .setView(consent)
             .setNegativeButton(if (force) "Close" else "Exit") { _, _ -> if (!force) finish() }
             .setPositiveButton("Agree", null)
             .create()
         dialog.setOnShowListener {
-            val positive = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
-            positive.isEnabled = box.isChecked
-            box.setOnCheckedChangeListener { _, checked -> positive.isEnabled = checked }
-            positive.setOnClickListener {
+            val agree = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            agree.isEnabled = consent.isChecked
+            consent.setOnCheckedChangeListener { _, checked -> agree.isEnabled = checked }
+            agree.setOnClickListener {
                 prefs.consentGranted = true
                 dialog.dismiss()
                 refreshStatus()
@@ -139,8 +138,9 @@ class MainActivity : Activity() {
 
     private fun openAccessibilitySettings() {
         val component = ComponentName(this, ScrollAccessibilityService::class.java)
-        val detail = Intent(Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS).apply {
-            data = Uri.parse("package:${component.packageName}")
+        val detail = Intent(ACCESSIBILITY_DETAILS_ACTION).apply {
+            data = Uri.parse("package:$packageName")
+            putExtra("android.intent.extra.COMPONENT_NAME", component)
         }
         runCatching { startActivity(detail) }
             .onFailure { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
@@ -154,17 +154,17 @@ class MainActivity : Activity() {
             .sortedBy { it.loadLabel(packageManager).toString().lowercase() }
             .toMutableList()
 
-        if (resolved.none { it.activityInfo.packageName == "com.openai.chatgpt" }) {
+        if (resolved.none { it.activityInfo.packageName == CHATGPT_PACKAGE }) {
             resolved.add(0, syntheticChatGptResolveInfo())
         }
 
         val selected = prefs.selectedPackages().toMutableSet()
         val labels = resolved.map { info ->
-            val pkg = info.activityInfo.packageName
-            if (pkg == "com.openai.chatgpt" && info.activityInfo.name == "synthetic") {
-                "ChatGPT — $pkg"
+            val appPackage = info.activityInfo.packageName
+            if (appPackage == CHATGPT_PACKAGE && info.activityInfo.name == SYNTHETIC_ACTIVITY) {
+                "ChatGPT — $appPackage"
             } else {
-                "${info.loadLabel(packageManager)} — $pkg"
+                "${info.loadLabel(packageManager)} — $appPackage"
             }
         }.toTypedArray()
         val checked = BooleanArray(resolved.size) { selected.contains(resolved[it].activityInfo.packageName) }
@@ -172,8 +172,8 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle("Show ScrollDock in")
             .setMultiChoiceItems(labels, checked) { _, index, isChecked ->
-                val pkg = resolved[index].activityInfo.packageName
-                if (isChecked) selected.add(pkg) else selected.remove(pkg)
+                val appPackage = resolved[index].activityInfo.packageName
+                if (isChecked) selected.add(appPackage) else selected.remove(appPackage)
             }
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Save") { _, _ ->
@@ -184,10 +184,22 @@ class MainActivity : Activity() {
     }
 
     private fun syntheticChatGptResolveInfo(): ResolveInfo = ResolveInfo().apply {
-        activityInfo = android.content.pm.ActivityInfo().apply {
-            packageName = "com.openai.chatgpt"
-            name = "synthetic"
+        activityInfo = ActivityInfo().apply {
+            packageName = CHATGPT_PACKAGE
+            name = SYNTHETIC_ACTIVITY
         }
+    }
+
+    private fun confirmClearSettings() {
+        AlertDialog.Builder(this)
+            .setTitle("Clear settings?")
+            .setMessage("This resets consent, selected apps, position, size, and opacity.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Clear") { _, _ ->
+                getSharedPreferences("scroll_dock", MODE_PRIVATE).edit().clear().apply()
+                recreate()
+            }
+            .show()
     }
 
     private fun isServiceEnabled(): Boolean {
@@ -215,6 +227,7 @@ class MainActivity : Activity() {
                     value.text = "$label: $progress"
                     if (fromUser) onChange(progress)
                 }
+
                 override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
                 override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
             })
@@ -264,4 +277,10 @@ class MainActivity : Activity() {
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    companion object {
+        private const val ACCESSIBILITY_DETAILS_ACTION = "android.settings.ACCESSIBILITY_DETAILS_SETTINGS"
+        private const val CHATGPT_PACKAGE = "com.openai.chatgpt"
+        private const val SYNTHETIC_ACTIVITY = "synthetic"
+    }
 }

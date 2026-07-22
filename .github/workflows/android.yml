@@ -19,15 +19,28 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK packages
+        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.5.0"
-      - name: Install Android SDK packages
-        run: yes | sdkmanager "platforms;android-37" "build-tools;36.0.0" >/dev/null
       - name: Test
-        run: gradle testDebugUnitTest --stacktrace
+        run: |
+          set +e
+          gradle testDebugUnitTest --stacktrace --console=plain > test-build.log 2>&1
+          code=$?
+          echo "Gradle exit code: $code"
+          exit $code
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScrollDock-test-log
+          path: test-build.log
+          if-no-files-found: error
       - name: Build debug APK
-        run: gradle assembleDebug --stacktrace
+        run: gradle assembleDebug --stacktrace --console=plain
       - uses: actions/upload-artifact@v4
         with:
           name: ScrollDock-debug
