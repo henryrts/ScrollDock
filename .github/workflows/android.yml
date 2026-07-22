@@ -32,6 +32,25 @@ jobs:
           version=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n 1)
           test -n "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Prepare persistent signing
+        id: signing
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SCROLLDOCK_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.SCROLLDOCK_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SCROLLDOCK_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SCROLLDOCK_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            keystore_path="$RUNNER_TEMP/scrolldock-release.jks"
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+            test -s "$keystore_path"
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "keystore_path=$keystore_path" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Persistent signing secrets are not configured. This debug APK may require uninstalling an older build before installation."
+          fi
       - name: Test
         run: |
           set +e
@@ -46,12 +65,34 @@ jobs:
           name: ScrollDock-test-log-v${{ steps.version.outputs.version }}
           path: test-build.log
           if-no-files-found: error
-      - name: Build debug APK
+      - name: Build APK
+        shell: bash
+        env:
+          SCROLLDOCK_KEYSTORE_PATH: ${{ steps.signing.outputs.keystore_path }}
+          SCROLLDOCK_KEYSTORE_PASSWORD: ${{ secrets.SCROLLDOCK_KEYSTORE_PASSWORD }}
+          SCROLLDOCK_KEY_ALIAS: ${{ secrets.SCROLLDOCK_KEY_ALIAS }}
+          SCROLLDOCK_KEY_PASSWORD: ${{ secrets.SCROLLDOCK_KEY_PASSWORD }}
         run: |
-          gradle assembleDebug --stacktrace --console=plain
-          cp app/build/outputs/apk/debug/app-debug.apk "ScrollDock-v${{ steps.version.outputs.version }}.apk"
+          if [ "${{ steps.signing.outputs.enabled }}" = "true" ]; then
+            gradle assembleRelease --stacktrace --console=plain
+            source_apk="app/build/outputs/apk/release/app-release.apk"
+            echo "Signing mode: persistent release key" > signing-info.txt
+          else
+            gradle assembleDebug --stacktrace --console=plain
+            source_apk="app/build/outputs/apk/debug/app-debug.apk"
+            echo "Signing mode: generated debug key; in-place updates are not guaranteed" > signing-info.txt
+          fi
+          output_apk="ScrollDock-v${{ steps.version.outputs.version }}.apk"
+          cp "$source_apk" "$output_apk"
+          apksigner verify --print-certs "$output_apk" >> signing-info.txt
       - uses: actions/upload-artifact@v4
         with:
           name: ScrollDock-v${{ steps.version.outputs.version }}
           path: ScrollDock-v${{ steps.version.outputs.version }}.apk
+          if-no-files-found: error
+      - name: Upload signing information
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScrollDock-signing-v${{ steps.version.outputs.version }}
+          path: signing-info.txt
           if-no-files-found: error
