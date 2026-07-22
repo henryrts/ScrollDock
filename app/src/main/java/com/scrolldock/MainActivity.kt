@@ -17,6 +17,8 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.Switch
@@ -65,7 +67,7 @@ class MainActivity : Activity() {
         }
 
         root.addView(title("ScrollDock"))
-        root.addView(body("Persistent Page Up, Page Down, Top and Bottom controls for selected Android apps."))
+        root.addView(body("Version ${appVersion()} · Persistent scrolling and message navigation for selected Android apps."))
 
         root.addView(section("Required setup"))
         serviceStatus = TextView(this).apply {
@@ -80,7 +82,7 @@ class MainActivity : Activity() {
         root.addView(
             body(
                 "Android requires you to enable ScrollDock manually in Accessibility settings. " +
-                    "The app now opens that screen immediately after consent and checks the result when you return."
+                    "The app checks the result when you return."
             )
         )
         root.addView(actionButton("Open app info / restricted settings", ::openAppInfo))
@@ -89,6 +91,7 @@ class MainActivity : Activity() {
         selectedAppsStatus = body("")
         root.addView(selectedAppsStatus)
         root.addView(actionButton("Choose apps", ::showAppPicker))
+        root.addView(actionButton("Configure app profiles", ::showProfilePicker))
         root.addView(Switch(this).apply {
             text = "Enable floating controls"
             isChecked = prefs.overlayEnabled
@@ -96,14 +99,15 @@ class MainActivity : Activity() {
             setOnCheckedChangeListener { _, checked -> prefs.overlayEnabled = checked }
         })
 
-        root.addView(section("Controls"))
-        root.addView(slider("Button size", 36, 64, prefs.buttonSizeDp) { prefs.buttonSizeDp = it })
-        root.addView(slider("Overlay opacity", 40, 100, prefs.opacityPercent) { prefs.opacityPercent = it })
-        root.addView(slider("Page distance", 60, 95, prefs.pagePercent) { prefs.pagePercent = it })
-        root.addView(slider("Repeat interval", 250, 900, prefs.intervalMs.toInt()) { prefs.intervalMs = it.toLong() })
+        root.addView(section("Default controls"))
+        root.addView(body("These values apply unless an app has its own profile."))
+        root.addView(slider("Button size", 40, 72, prefs.buttonSizeDp) { prefs.buttonSizeDp = it })
+        root.addView(slider("Overlay opacity", 30, 100, prefs.opacityPercent) { prefs.opacityPercent = it })
+        root.addView(slider("Page distance", 50, 95, prefs.pagePercent) { prefs.pagePercent = it })
+        root.addView(slider("Repeat interval", 200, 1_200, prefs.intervalMs.toInt()) { prefs.intervalMs = it.toLong() })
 
         root.addView(section("Test"))
-        root.addView(body("Open a long local page. ScrollDock permits its own test screen even when only ChatGPT is selected."))
+        root.addView(body("Use the local page to verify Page Up, Page Down, Top and Bottom before testing third-party apps."))
         root.addView(actionButton("Open navigation test") {
             startActivity(Intent(this, TestActivity::class.java))
         })
@@ -148,8 +152,8 @@ class MainActivity : Activity() {
             enableAccessButton.text = if (enabled) "Manage accessibility access" else "Enable accessibility access"
         }
 
-        val packages = prefs.selectedPackages()
-        selectedAppsStatus.text = "Selected apps: ${packages.size}\n${packages.sorted().joinToString("\n")}"
+        val packages = prefs.selectedPackages().sorted()
+        selectedAppsStatus.text = "Selected apps: ${packages.size}\n${packages.joinToString("\n") { appLabel(it) }}"
     }
 
     private fun showDisclosure(force: Boolean = false) {
@@ -193,11 +197,7 @@ class MainActivity : Activity() {
     private fun showAccessibilityRequiredDialog(returnedWithoutEnabling: Boolean = false) {
         if (isFinishing || isDestroyed || isServiceEnabled() || setupDialog?.isShowing == true) return
 
-        val prefix = if (returnedWithoutEnabling) {
-            "ScrollDock is still disabled. "
-        } else {
-            "One final step is required. "
-        }
+        val prefix = if (returnedWithoutEnabling) "ScrollDock is still disabled. " else "One final step is required. "
         val dialog = AlertDialog.Builder(this)
             .setTitle("Enable ScrollDock")
             .setMessage(
@@ -240,17 +240,7 @@ class MainActivity : Activity() {
     }
 
     private fun showAppPicker() {
-        val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        val resolved = packageManager.queryIntentActivities(launcherIntent, 0)
-            .filter { it.activityInfo.packageName != packageName }
-            .distinctBy { it.activityInfo.packageName }
-            .sortedBy { it.loadLabel(packageManager).toString().lowercase() }
-            .toMutableList()
-
-        if (resolved.none { it.activityInfo.packageName == CHATGPT_PACKAGE }) {
-            resolved.add(0, syntheticChatGptResolveInfo())
-        }
-
+        val resolved = launcherApps()
         val selected = prefs.selectedPackages().toMutableSet()
         val labels = resolved.map { info ->
             val appPackage = info.activityInfo.packageName
@@ -276,6 +266,99 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun showProfilePicker() {
+        val packages = prefs.selectedPackages().sorted()
+        if (packages.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setMessage("Choose at least one app first.")
+                .setPositiveButton("OK", null)
+                .show()
+            return
+        }
+        val labels = packages.map(::appLabel).toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Configure app profile")
+            .setItems(labels) { _, index -> showProfileEditor(packages[index]) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showProfileEditor(appPackage: String) {
+        val profile = prefs.profile(appPackage)
+        var selectedMethod = profile.scrollMethod
+        var buttonSize = profile.buttonSizeDp
+        var opacity = profile.opacityPercent
+        var pagePercent = profile.pagePercent
+        var interval = profile.intervalMs.toInt()
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(12), dp(20), dp(12))
+        }
+        root.addView(body(appPackage))
+        root.addView(profileLabel("Scroll method"))
+        val methods = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
+        ScrollMethod.entries.forEach { method ->
+            val button = RadioButton(this).apply {
+                id = View.generateViewId()
+                text = when (method) {
+                    ScrollMethod.AUTO -> "Automatic target"
+                    ScrollMethod.LOCKED -> "Locked target selected from the overlay"
+                    ScrollMethod.GESTURE_ONLY -> "Gesture only"
+                }
+                isChecked = method == selectedMethod
+                setOnCheckedChangeListener { _, checked -> if (checked) selectedMethod = method }
+            }
+            methods.addView(button)
+        }
+        root.addView(methods)
+
+        val messageSwitch = Switch(this).apply {
+            text = "Show previous / next message buttons"
+            isChecked = profile.messageButtonsEnabled
+            setPadding(0, dp(10), 0, dp(10))
+        }
+        root.addView(messageSwitch)
+        root.addView(slider("Button size", 40, 72, buttonSize) { buttonSize = it })
+        root.addView(slider("Overlay opacity", 30, 100, opacity) { opacity = it })
+        root.addView(slider("Page distance", 50, 95, pagePercent) { pagePercent = it })
+        root.addView(slider("Repeat interval", 200, 1_200, interval) { interval = it })
+
+        val content = ScrollView(this).apply { addView(root) }
+        AlertDialog.Builder(this)
+            .setTitle(appLabel(appPackage))
+            .setView(content)
+            .setNegativeButton("Cancel", null)
+            .setNeutralButton("Use defaults") { _, _ -> prefs.clearProfile(appPackage) }
+            .setPositiveButton("Save") { _, _ ->
+                prefs.saveProfile(
+                    appPackage,
+                    profile.copy(
+                        buttonSizeDp = buttonSize,
+                        opacityPercent = opacity,
+                        pagePercent = pagePercent,
+                        intervalMs = interval.toLong(),
+                        scrollMethod = selectedMethod,
+                        messageButtonsEnabled = messageSwitch.isChecked,
+                    ),
+                )
+            }
+            .show()
+    }
+
+    private fun launcherApps(): MutableList<ResolveInfo> {
+        val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val resolved = packageManager.queryIntentActivities(launcherIntent, 0)
+            .filter { it.activityInfo.packageName != packageName }
+            .distinctBy { it.activityInfo.packageName }
+            .sortedBy { it.loadLabel(packageManager).toString().lowercase() }
+            .toMutableList()
+        if (resolved.none { it.activityInfo.packageName == CHATGPT_PACKAGE }) {
+            resolved.add(0, syntheticChatGptResolveInfo())
+        }
+        return resolved
+    }
+
     private fun syntheticChatGptResolveInfo(): ResolveInfo = ResolveInfo().apply {
         activityInfo = ActivityInfo().apply {
             packageName = CHATGPT_PACKAGE
@@ -283,10 +366,21 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun appLabel(appPackage: String): String = runCatching {
+        packageManager.getApplicationLabel(packageManager.getApplicationInfo(appPackage, 0)).toString()
+    }.getOrElse {
+        if (appPackage == CHATGPT_PACKAGE) "ChatGPT" else appPackage
+    }
+
+    private fun appVersion(): String = runCatching {
+        @Suppress("DEPRECATION")
+        packageManager.getPackageInfo(packageName, 0).versionName
+    }.getOrNull().orEmpty()
+
     private fun confirmClearSettings() {
         AlertDialog.Builder(this)
             .setTitle("Clear settings?")
-            .setMessage("This resets consent, selected apps, position, size, and opacity.")
+            .setMessage("This resets consent, selected apps, per-app profiles, target locks, positions and control settings.")
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Clear") { _, _ ->
                 getSharedPreferences("scroll_dock", MODE_PRIVATE).edit().clear().apply()
@@ -342,6 +436,14 @@ class MainActivity : Activity() {
         textSize = 21f
         setTextColor(resolveTextColor())
         setPadding(0, dp(24), 0, dp(6))
+    }
+
+    private fun profileLabel(text: String) = TextView(this).apply {
+        this.text = text
+        textSize = 18f
+        setTypeface(typeface, Typeface.BOLD)
+        setTextColor(resolveTextColor())
+        setPadding(0, dp(12), 0, dp(4))
     }
 
     private fun body(text: String) = TextView(this).apply {
