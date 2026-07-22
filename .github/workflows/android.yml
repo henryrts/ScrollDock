@@ -26,9 +26,21 @@ jobs:
         with:
           gradle-version: "9.5.0"
       - name: Test
-        run: gradle testDebugUnitTest --stacktrace
+        run: |
+          set +e
+          gradle testDebugUnitTest --stacktrace --console=plain > test-build.log 2>&1
+          code=$?
+          echo "Gradle exit code: $code"
+          exit $code
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScrollDock-test-log
+          path: test-build.log
+          if-no-files-found: error
       - name: Build debug APK
-        run: gradle assembleDebug --stacktrace
+        run: gradle assembleDebug --stacktrace --console=plain
       - uses: actions/upload-artifact@v4
         with:
           name: ScrollDock-debug
