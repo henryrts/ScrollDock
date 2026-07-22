@@ -9,13 +9,15 @@ class ScrollCommandExecutor(
     private val service: ScrollAccessibilityService,
     private val resolver: ScrollableNodeResolver,
     private val gestureFallback: GestureFallback,
-    private val prefs: Prefs,
+    private val messageNavigator: MessageNavigator,
     private val listener: Listener,
 ) {
     interface Listener {
         fun onActiveCommand(command: ScrollCommand?)
         fun onEdge(direction: ScrollDirection)
+        fun onMessageEdge(direction: MessageDirection, role: MessageRole)
         fun onFailure()
+        fun onTimeout(direction: ScrollDirection)
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -32,12 +34,18 @@ class ScrollCommandExecutor(
         active = command
         listener.onActiveCommand(command)
         val token = generation
+
+        command.messageRequestOrNull()?.let { (direction, role) ->
+            runMessage(direction, role, token)
+            return
+        }
+
         when (command) {
             ScrollCommand.PAGE_UP -> runPage(ScrollDirection.UP, token)
             ScrollCommand.PAGE_DOWN -> runPage(ScrollDirection.DOWN, token)
             ScrollCommand.TOP -> runToEdge(ScrollDirection.UP, token, 0, SystemClock.uptimeMillis())
             ScrollCommand.BOTTOM -> runToEdge(ScrollDirection.DOWN, token, 0, SystemClock.uptimeMillis())
-            ScrollCommand.STOP -> stop()
+            else -> stop()
         }
     }
 
@@ -57,24 +65,42 @@ class ScrollCommandExecutor(
         if (!silent) listener.onActiveCommand(null)
     }
 
+    private fun runMessage(direction: MessageDirection, role: MessageRole, token: Int) {
+        messageNavigator.navigate(direction, role) { result ->
+            if (!isCurrent(token)) return@navigate
+            active = null
+            listener.onActiveCommand(null)
+            when (result) {
+                StepResult.MOVED -> Unit
+                StepResult.EDGE -> listener.onMessageEdge(direction, role)
+                StepResult.FAILED -> listener.onFailure()
+            }
+        }
+    }
+
     private fun runPage(direction: ScrollDirection, token: Int) {
         performStep(direction, token) { result ->
             if (!isCurrent(token)) return@performStep
             active = null
             listener.onActiveCommand(null)
-            if (result != StepResult.MOVED) listener.onFailure()
+            when (result) {
+                StepResult.MOVED -> Unit
+                StepResult.EDGE -> listener.onEdge(direction)
+                StepResult.FAILED -> listener.onFailure()
+            }
         }
     }
 
     private fun runContinuous(direction: ScrollDirection, token: Int) {
         performStep(direction, token) { result ->
             if (!isCurrent(token)) return@performStep
-            if (result == StepResult.MOVED) {
-                handler.postDelayed({ runContinuous(direction, token) }, prefs.intervalMs)
-            } else {
-                active = null
-                listener.onActiveCommand(null)
-                listener.onEdge(direction)
+            when (result) {
+                StepResult.MOVED -> handler.postDelayed(
+                    { runContinuous(direction, token) },
+                    service.currentProfile().intervalMs,
+                )
+                StepResult.EDGE -> finishAtEdge(direction, token)
+                StepResult.FAILED -> finishFailure(token)
             }
         }
     }
@@ -82,18 +108,18 @@ class ScrollCommandExecutor(
     private fun runToEdge(direction: ScrollDirection, token: Int, attempts: Int, startedAt: Long) {
         if (!isCurrent(token)) return
         if (attempts >= MAX_ATTEMPTS || SystemClock.uptimeMillis() - startedAt >= MAX_DURATION_MS) {
-            finishAtEdge(direction, token)
+            finishTimeout(direction, token)
             return
         }
         performStep(direction, token) { result ->
             if (!isCurrent(token)) return@performStep
-            if (result == StepResult.MOVED) {
-                handler.postDelayed(
+            when (result) {
+                StepResult.MOVED -> handler.postDelayed(
                     { runToEdge(direction, token, attempts + 1, startedAt) },
-                    prefs.intervalMs,
+                    service.currentProfile().intervalMs,
                 )
-            } else {
-                finishAtEdge(direction, token)
+                StepResult.EDGE -> finishAtEdge(direction, token)
+                StepResult.FAILED -> finishFailure(token)
             }
         }
     }
@@ -105,6 +131,20 @@ class ScrollCommandExecutor(
         listener.onEdge(direction)
     }
 
+    private fun finishFailure(token: Int) {
+        if (!isCurrent(token)) return
+        active = null
+        listener.onActiveCommand(null)
+        listener.onFailure()
+    }
+
+    private fun finishTimeout(direction: ScrollDirection, token: Int) {
+        if (!isCurrent(token)) return
+        active = null
+        listener.onActiveCommand(null)
+        listener.onTimeout(direction)
+    }
+
     private fun performStep(direction: ScrollDirection, token: Int, completion: (StepResult) -> Unit) {
         val root = service.rootInActiveWindow
         if (root == null) {
@@ -113,10 +153,19 @@ class ScrollCommandExecutor(
         }
         val node = resolver.resolve(root, direction)
         if (node == null) {
-            tryGesture(direction, token, service.scrollEventCounter, completion)
+            tryGesture(direction, token, null, null, completion)
             return
         }
-        attemptSemantic(node, resolver.actionIds(direction), 0, direction, token, completion)
+        val fingerprint = resolver.fingerprint(node)
+        attemptSemantic(
+            node = node,
+            actions = resolver.actionIds(direction),
+            index = 0,
+            direction = direction,
+            token = token,
+            fingerprint = fingerprint,
+            completion = completion,
+        )
     }
 
     private fun attemptSemantic(
@@ -125,25 +174,30 @@ class ScrollCommandExecutor(
         index: Int,
         direction: ScrollDirection,
         token: Int,
+        fingerprint: ScrollTargetFingerprint,
         completion: (StepResult) -> Unit,
     ) {
         if (!isCurrent(token)) return
         if (index >= actions.size) {
-            tryGesture(direction, token, service.scrollEventCounter, completion)
+            tryGesture(direction, token, node, fingerprint, completion)
             return
         }
-        val before = service.scrollEventCounter
+
+        val beforeSequence = service.scrollObservationSequence
+        val beforeSnapshot = resolver.snapshot(node)
         val performed = runCatching { node.performAction(actions[index]) }.getOrDefault(false)
         if (!performed) {
-            attemptSemantic(node, actions, index + 1, direction, token, completion)
+            attemptSemantic(node, actions, index + 1, direction, token, fingerprint, completion)
             return
         }
+
         handler.postDelayed({
             if (!isCurrent(token)) return@postDelayed
-            if (service.scrollEventCounter > before) {
+            val structurallyMoved = runCatching { resolver.snapshot(node).differsFrom(beforeSnapshot) }.getOrDefault(false)
+            if (structurallyMoved || service.hasMatchingScrollAfter(beforeSequence, fingerprint)) {
                 completion(StepResult.MOVED)
             } else {
-                attemptSemantic(node, actions, index + 1, direction, token, completion)
+                attemptSemantic(node, actions, index + 1, direction, token, fingerprint, completion)
             }
         }, ACTION_SETTLE_MS)
     }
@@ -151,9 +205,12 @@ class ScrollCommandExecutor(
     private fun tryGesture(
         direction: ScrollDirection,
         token: Int,
-        before: Long,
+        node: AccessibilityNodeInfo?,
+        fingerprint: ScrollTargetFingerprint?,
         completion: (StepResult) -> Unit,
     ) {
+        val beforeSequence = service.scrollObservationSequence
+        val beforeSnapshot = node?.let { runCatching { resolver.snapshot(it) }.getOrNull() }
         gestureFallback.dispatch(direction) { dispatched ->
             if (!isCurrent(token)) return@dispatch
             if (!dispatched) {
@@ -162,7 +219,11 @@ class ScrollCommandExecutor(
             }
             handler.postDelayed({
                 if (!isCurrent(token)) return@postDelayed
-                completion(if (service.scrollEventCounter > before) StepResult.MOVED else StepResult.NO_MOVEMENT)
+                val structurallyMoved = if (node != null && beforeSnapshot != null) {
+                    runCatching { resolver.snapshot(node).differsFrom(beforeSnapshot) }.getOrDefault(false)
+                } else false
+                val observedMovement = service.hasMatchingScrollAfter(beforeSequence, fingerprint)
+                completion(if (structurallyMoved || observedMovement) StepResult.MOVED else StepResult.EDGE)
             }, GESTURE_SETTLE_MS)
         }
     }
@@ -170,8 +231,8 @@ class ScrollCommandExecutor(
     private fun isCurrent(token: Int): Boolean = token == generation && active != null
 
     companion object {
-        private const val ACTION_SETTLE_MS = 260L
-        private const val GESTURE_SETTLE_MS = 420L
+        private const val ACTION_SETTLE_MS = 300L
+        private const val GESTURE_SETTLE_MS = 480L
         private const val MAX_DURATION_MS = 6_000L
         private const val MAX_ATTEMPTS = 30
     }
