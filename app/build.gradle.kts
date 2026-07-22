@@ -2,6 +2,17 @@ plugins {
     id("com.android.application")
 }
 
+val signingStorePath = System.getenv("SCROLLDOCK_KEYSTORE_PATH")
+val signingStorePassword = System.getenv("SCROLLDOCK_KEYSTORE_PASSWORD")
+val signingKeyAlias = System.getenv("SCROLLDOCK_KEY_ALIAS")
+val signingKeyPassword = System.getenv("SCROLLDOCK_KEY_PASSWORD")
+val hasReleaseSigning = listOf(
+    signingStorePath,
+    signingStorePassword,
+    signingKeyAlias,
+    signingKeyPassword,
+).all { !it.isNullOrBlank() }
+
 android {
     namespace = "com.scrolldock"
     compileSdk = 36
@@ -10,10 +21,21 @@ android {
         applicationId = "com.scrolldock"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.2.0"
+        versionCode = 4
+        versionName = "0.2.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    val releaseSigningConfig = if (hasReleaseSigning) {
+        signingConfigs.create("release") {
+            storeFile = file(signingStorePath!!)
+            storePassword = signingStorePassword
+            keyAlias = signingKeyAlias
+            keyPassword = signingKeyPassword
+        }
+    } else {
+        null
     }
 
     buildTypes {
@@ -21,6 +43,7 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            releaseSigningConfig?.let { signingConfig = it }
         }
     }
 
