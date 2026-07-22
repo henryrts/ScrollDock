@@ -1,0 +1,267 @@
+package com.scrolldock
+
+import android.app.Activity
+import android.app.AlertDialog
+import android.content.ComponentName
+import android.content.Intent
+import android.content.pm.ResolveInfo
+import android.graphics.Color
+import android.net.Uri
+import android.os.Bundle
+import android.provider.Settings
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.Button
+import android.widget.CheckBox
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.SeekBar
+import android.widget.Switch
+import android.widget.TextView
+
+class MainActivity : Activity() {
+    private lateinit var prefs: Prefs
+    private lateinit var serviceStatus: TextView
+    private lateinit var selectedAppsStatus: TextView
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        prefs = Prefs(this)
+        setContentView(buildContent())
+        if (!prefs.consentGranted) showDisclosure()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::serviceStatus.isInitialized) refreshStatus()
+    }
+
+    private fun buildContent(): View {
+        val scroll = ScrollView(this)
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(24), dp(20), dp(40))
+        }
+        scroll.addView(root, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+
+        root.addView(title("ScrollDock"))
+        root.addView(body("Persistent Page Up, Page Down, Top and Bottom controls for selected Android apps."))
+
+        root.addView(section("Setup"))
+        serviceStatus = body("")
+        root.addView(serviceStatus)
+        root.addView(actionButton("Open accessibility settings") { openAccessibilitySettings() })
+
+        selectedAppsStatus = body("")
+        root.addView(selectedAppsStatus)
+        root.addView(actionButton("Choose apps") { showAppPicker() })
+
+        val enableSwitch = Switch(this).apply {
+            text = "Enable floating controls"
+            isChecked = prefs.overlayEnabled
+            setPadding(0, dp(10), 0, dp(10))
+            setOnCheckedChangeListener { _, checked -> prefs.overlayEnabled = checked }
+        }
+        root.addView(enableSwitch)
+
+        root.addView(section("Controls"))
+        root.addView(slider("Button size", 36, 64, prefs.buttonSizeDp) { prefs.buttonSizeDp = it })
+        root.addView(slider("Overlay opacity", 40, 100, prefs.opacityPercent) { prefs.opacityPercent = it })
+        root.addView(slider("Page distance", 60, 95, prefs.pagePercent) { prefs.pagePercent = it })
+        root.addView(slider("Repeat interval", 250, 900, prefs.intervalMs.toInt()) { prefs.intervalMs = it.toLong() })
+
+        root.addView(section("Test"))
+        root.addView(body("Open a long local page. ScrollDock also permits its own test screen even when only ChatGPT is selected."))
+        root.addView(actionButton("Open navigation test") {
+            startActivity(Intent(this, TestActivity::class.java))
+        })
+
+        root.addView(section("Privacy"))
+        root.addView(body("Internet permission: Not requested\nScreen recording: Not used\nText storage: None\nAnalytics: None\nAccessibility node text: Never read, logged, or stored\nLocal backup: Disabled"))
+        root.addView(actionButton("Review disclosure") { showDisclosure(force = true) })
+        root.addView(actionButton("Clear local settings") {
+            AlertDialog.Builder(this)
+                .setTitle("Clear settings?")
+                .setMessage("This resets consent, selected apps, position, size, and opacity.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Clear") { _, _ ->
+                    getSharedPreferences("scroll_dock", MODE_PRIVATE).edit().clear().apply()
+                    recreate()
+                }
+                .show()
+        })
+
+        refreshStatus()
+        return scroll
+    }
+
+    private fun refreshStatus() {
+        val enabled = isServiceEnabled()
+        serviceStatus.text = if (enabled) {
+            "Accessibility service: Enabled"
+        } else {
+            "Accessibility service: Disabled"
+        }
+        val packages = prefs.selectedPackages()
+        selectedAppsStatus.text = "Selected apps: ${packages.size}\n${packages.sorted().joinToString("\n")}"
+    }
+
+    private fun showDisclosure(force: Boolean = false) {
+        if (prefs.consentGranted && !force) return
+        val box = CheckBox(this).apply {
+            text = "I understand and agree"
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Accessibility disclosure")
+            .setMessage(
+                "ScrollDock can observe which selected app is open and interact with scrollable screen elements. " +
+                    "It uses this access only when you press a ScrollDock control. It does not collect, save, or transmit screen text."
+            )
+            .setView(box)
+            .setNegativeButton(if (force) "Close" else "Exit") { _, _ -> if (!force) finish() }
+            .setPositiveButton("Agree", null)
+            .create()
+        dialog.setOnShowListener {
+            val positive = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            positive.isEnabled = box.isChecked
+            box.setOnCheckedChangeListener { _, checked -> positive.isEnabled = checked }
+            positive.setOnClickListener {
+                prefs.consentGranted = true
+                dialog.dismiss()
+                refreshStatus()
+            }
+        }
+        dialog.setCanceledOnTouchOutside(force)
+        dialog.show()
+    }
+
+    private fun openAccessibilitySettings() {
+        val component = ComponentName(this, ScrollAccessibilityService::class.java)
+        val detail = Intent(Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS).apply {
+            data = Uri.parse("package:${component.packageName}")
+        }
+        runCatching { startActivity(detail) }
+            .onFailure { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+    }
+
+    private fun showAppPicker() {
+        val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val resolved = packageManager.queryIntentActivities(launcherIntent, 0)
+            .filter { it.activityInfo.packageName != packageName }
+            .distinctBy { it.activityInfo.packageName }
+            .sortedBy { it.loadLabel(packageManager).toString().lowercase() }
+            .toMutableList()
+
+        if (resolved.none { it.activityInfo.packageName == "com.openai.chatgpt" }) {
+            resolved.add(0, syntheticChatGptResolveInfo())
+        }
+
+        val selected = prefs.selectedPackages().toMutableSet()
+        val labels = resolved.map { info ->
+            val pkg = info.activityInfo.packageName
+            if (pkg == "com.openai.chatgpt" && info.activityInfo.name == "synthetic") {
+                "ChatGPT — $pkg"
+            } else {
+                "${info.loadLabel(packageManager)} — $pkg"
+            }
+        }.toTypedArray()
+        val checked = BooleanArray(resolved.size) { selected.contains(resolved[it].activityInfo.packageName) }
+
+        AlertDialog.Builder(this)
+            .setTitle("Show ScrollDock in")
+            .setMultiChoiceItems(labels, checked) { _, index, isChecked ->
+                val pkg = resolved[index].activityInfo.packageName
+                if (isChecked) selected.add(pkg) else selected.remove(pkg)
+            }
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save") { _, _ ->
+                prefs.setSelectedPackages(selected)
+                refreshStatus()
+            }
+            .show()
+    }
+
+    private fun syntheticChatGptResolveInfo(): ResolveInfo = ResolveInfo().apply {
+        activityInfo = android.content.pm.ActivityInfo().apply {
+            packageName = "com.openai.chatgpt"
+            name = "synthetic"
+        }
+    }
+
+    private fun isServiceEnabled(): Boolean {
+        val expected = ComponentName(this, ScrollAccessibilityService::class.java).flattenToString()
+        val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+            ?: return false
+        return enabled.split(':').any { it.equals(expected, ignoreCase = true) }
+    }
+
+    private fun slider(label: String, min: Int, max: Int, current: Int, onChange: (Int) -> Unit): View {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(8), 0, dp(8))
+        }
+        val value = TextView(this).apply {
+            textSize = 16f
+            text = "$label: $current"
+        }
+        val seek = SeekBar(this).apply {
+            this.min = min
+            this.max = max
+            progress = current
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    value.text = "$label: $progress"
+                    if (fromUser) onChange(progress)
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        container.addView(value)
+        container.addView(seek)
+        return container
+    }
+
+    private fun title(text: String) = TextView(this).apply {
+        this.text = text
+        textSize = 32f
+        setTextColor(resolveTextColor())
+        setPadding(0, 0, 0, dp(6))
+    }
+
+    private fun section(text: String) = TextView(this).apply {
+        this.text = text
+        textSize = 21f
+        setTextColor(resolveTextColor())
+        setPadding(0, dp(24), 0, dp(6))
+    }
+
+    private fun body(text: String) = TextView(this).apply {
+        this.text = text
+        textSize = 16f
+        setTextColor(resolveTextColor())
+        setLineSpacing(0f, 1.15f)
+        setPadding(0, dp(4), 0, dp(8))
+    }
+
+    private fun actionButton(text: String, action: () -> Unit) = Button(this).apply {
+        this.text = text
+        isAllCaps = false
+        gravity = Gravity.CENTER
+        setOnClickListener { action() }
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply {
+            topMargin = dp(4)
+            bottomMargin = dp(4)
+        }
+    }
+
+    private fun resolveTextColor(): Int {
+        val attrs = intArrayOf(android.R.attr.textColorPrimary)
+        val array = obtainStyledAttributes(attrs)
+        return array.getColor(0, Color.BLACK).also { array.recycle() }
+    }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+}
