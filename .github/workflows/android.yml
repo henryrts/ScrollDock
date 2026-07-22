@@ -84,7 +84,7 @@ jobs:
           fi
           output_apk="ScrollDock-v${{ steps.version.outputs.version }}.apk"
           cp "$source_apk" "$output_apk"
-          apksigner verify --print-certs "$output_apk" >> signing-info.txt
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$output_apk" >> signing-info.txt
       - uses: actions/upload-artifact@v4
         with:
           name: ScrollDock-v${{ steps.version.outputs.version }}
