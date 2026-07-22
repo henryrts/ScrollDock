@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.ResolveInfo
 import android.graphics.Color
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
@@ -25,17 +26,33 @@ class MainActivity : Activity() {
     private lateinit var prefs: Prefs
     private lateinit var serviceStatus: TextView
     private lateinit var selectedAppsStatus: TextView
+    private lateinit var enableAccessButton: Button
+    private var setupDialog: AlertDialog? = null
+    private var openedAccessibilitySettings = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
         setContentView(buildContent())
-        if (!prefs.consentGranted) showDisclosure()
+        window.decorView.post(::advanceSetup)
     }
 
     override fun onResume() {
         super.onResume()
         if (::serviceStatus.isInitialized) refreshStatus()
+
+        if (openedAccessibilitySettings) {
+            openedAccessibilitySettings = false
+            window.decorView.post {
+                if (!isServiceEnabled()) showAccessibilityRequiredDialog(returnedWithoutEnabling = true)
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        setupDialog?.dismiss()
+        setupDialog = null
+        super.onDestroy()
     }
 
     private fun buildContent(): View {
@@ -50,11 +67,25 @@ class MainActivity : Activity() {
         root.addView(title("ScrollDock"))
         root.addView(body("Persistent Page Up, Page Down, Top and Bottom controls for selected Android apps."))
 
-        root.addView(section("Setup"))
-        serviceStatus = body("")
+        root.addView(section("Required setup"))
+        serviceStatus = TextView(this).apply {
+            textSize = 18f
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+        }
         root.addView(serviceStatus)
-        root.addView(actionButton("Open accessibility settings", ::openAccessibilitySettings))
 
+        enableAccessButton = actionButton("Enable accessibility access", ::openAccessibilitySettings)
+        root.addView(enableAccessButton)
+        root.addView(
+            body(
+                "Android requires you to enable ScrollDock manually in Accessibility settings. " +
+                    "The app now opens that screen immediately after consent and checks the result when you return."
+            )
+        )
+        root.addView(actionButton("Open app info / restricted settings", ::openAppInfo))
+
+        root.addView(section("Apps"))
         selectedAppsStatus = body("")
         root.addView(selectedAppsStatus)
         root.addView(actionButton("Choose apps", ::showAppPicker))
@@ -95,18 +126,36 @@ class MainActivity : Activity() {
         return scroll
     }
 
-    private fun refreshStatus() {
-        serviceStatus.text = if (isServiceEnabled()) {
-            "Accessibility service: Enabled"
-        } else {
-            "Accessibility service: Disabled"
+    private fun advanceSetup() {
+        when {
+            !prefs.consentGranted -> showDisclosure()
+            !isServiceEnabled() -> showAccessibilityRequiredDialog()
+            else -> refreshStatus()
         }
+    }
+
+    private fun refreshStatus() {
+        val enabled = isServiceEnabled()
+        serviceStatus.text = if (enabled) {
+            "✓ Accessibility access enabled\nScrollDock can show controls in selected apps."
+        } else {
+            "! Accessibility access required\nFloating controls cannot work until ScrollDock is enabled."
+        }
+        serviceStatus.setTextColor(if (enabled) 0xFF2E7D32.toInt() else 0xFFC62828.toInt())
+        serviceStatus.setBackgroundColor(if (enabled) 0x182E7D32 else 0x18C62828)
+
+        if (::enableAccessButton.isInitialized) {
+            enableAccessButton.text = if (enabled) "Manage accessibility access" else "Enable accessibility access"
+        }
+
         val packages = prefs.selectedPackages()
         selectedAppsStatus.text = "Selected apps: ${packages.size}\n${packages.sorted().joinToString("\n")}"
     }
 
     private fun showDisclosure(force: Boolean = false) {
         if (prefs.consentGranted && !force) return
+        setupDialog?.dismiss()
+
         val consent = CheckBox(this).apply {
             text = "I understand and agree"
             setPadding(dp(12), dp(8), dp(12), dp(8))
@@ -120,30 +169,74 @@ class MainActivity : Activity() {
             )
             .setView(consent)
             .setNegativeButton(if (force) "Close" else "Exit") { _, _ -> if (!force) finish() }
-            .setPositiveButton("Agree", null)
+            .setPositiveButton("Continue", null)
+            .setCancelable(force)
             .create()
+
         dialog.setOnShowListener {
-            val agree = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
-            agree.isEnabled = consent.isChecked
-            consent.setOnCheckedChangeListener { _, checked -> agree.isEnabled = checked }
-            agree.setOnClickListener {
+            val continueButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            continueButton.isEnabled = consent.isChecked
+            consent.setOnCheckedChangeListener { _, checked -> continueButton.isEnabled = checked }
+            continueButton.setOnClickListener {
                 prefs.consentGranted = true
                 dialog.dismiss()
-                refreshStatus()
+                showAccessibilityRequiredDialog()
             }
         }
-        dialog.setCanceledOnTouchOutside(force)
+        dialog.setOnDismissListener {
+            if (setupDialog === dialog) setupDialog = null
+        }
+        setupDialog = dialog
+        dialog.show()
+    }
+
+    private fun showAccessibilityRequiredDialog(returnedWithoutEnabling: Boolean = false) {
+        if (isFinishing || isDestroyed || isServiceEnabled() || setupDialog?.isShowing == true) return
+
+        val prefix = if (returnedWithoutEnabling) {
+            "ScrollDock is still disabled. "
+        } else {
+            "One final step is required. "
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Enable ScrollDock")
+            .setMessage(
+                prefix +
+                    "On the next screen, find ScrollDock under installed or downloaded apps, open it, and turn on Use ScrollDock.\n\n" +
+                    "If Android reports a restricted setting, return here and use Open app info / restricted settings."
+            )
+            .setPositiveButton("Open accessibility settings") { _, _ -> openAccessibilitySettings() }
+            .setNeutralButton("Open app info") { _, _ -> openAppInfo() }
+            .setNegativeButton("Not now", null)
+            .setCancelable(false)
+            .create()
+        dialog.setOnDismissListener {
+            if (setupDialog === dialog) setupDialog = null
+        }
+        setupDialog = dialog
         dialog.show()
     }
 
     private fun openAccessibilitySettings() {
-        val component = ComponentName(this, ScrollAccessibilityService::class.java)
-        val detail = Intent(ACCESSIBILITY_DETAILS_ACTION).apply {
-            data = Uri.parse("package:$packageName")
-            putExtra("android.intent.extra.COMPONENT_NAME", component)
+        setupDialog?.dismiss()
+        openedAccessibilitySettings = true
+        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
-        runCatching { startActivity(detail) }
-            .onFailure { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        runCatching { startActivity(intent) }
+            .onFailure {
+                openedAccessibilitySettings = false
+                openAppInfo()
+            }
+    }
+
+    private fun openAppInfo() {
+        setupDialog?.dismiss()
+        startActivity(
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.parse("package:$packageName")
+            }
+        )
     }
 
     private fun showAppPicker() {
@@ -279,7 +372,6 @@ class MainActivity : Activity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     companion object {
-        private const val ACCESSIBILITY_DETAILS_ACTION = "android.settings.ACCESSIBILITY_DETAILS_SETTINGS"
         private const val CHATGPT_PACKAGE = "com.openai.chatgpt"
         private const val SYNTHETIC_ACTIVITY = "synthetic"
     }
