@@ -18,7 +18,7 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
     private lateinit var resolver: ScrollableNodeResolver
     private lateinit var executor: ScrollCommandExecutor
     private lateinit var overlay: OverlayController
-    private lateinit var quickPhraseOverlay: QuickPhraseOverlayController
+    private lateinit var promptOverlay: CompactPromptOverlayController
     private val handler = Handler(Looper.getMainLooper())
     private val observations = ArrayDeque<ScrollObservation>()
     private var foregroundPackage: String? = null
@@ -35,7 +35,7 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         resolver = ScrollableNodeResolver(this)
         val gesture = GestureFallback(this)
         val messageNavigator = MessageNavigator(this)
-        quickPhraseOverlay = QuickPhraseOverlayController(this)
+        promptOverlay = CompactPromptOverlayController(this)
         overlay = OverlayController(
             service = this,
             prefs = prefs,
@@ -55,6 +55,7 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
                 executor.startContinuous(direction)
             },
             stop = { executor.stop() },
+            promptToggle = { promptOverlay.toggle(overlay.bounds()) },
         )
         executor = ScrollCommandExecutor(
             service = this,
@@ -104,6 +105,7 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
             if (detected != foregroundPackage) {
                 foregroundPackage = detected
                 executor.stop()
+                promptOverlay.hide()
                 resolver.invalidate()
             }
             updateVisibility()
@@ -120,7 +122,7 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         if (::prefs.isInitialized) prefs.unregister(this)
         if (::executor.isInitialized) executor.stop()
         if (::overlay.isInitialized) overlay.hide()
-        if (::quickPhraseOverlay.isInitialized) quickPhraseOverlay.hide()
+        if (::promptOverlay.isInitialized) promptOverlay.hide()
         super.onDestroy()
     }
 
@@ -133,7 +135,7 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
                 updateVisibility()
             }
             key?.startsWith(FeaturePrefs.QUICK_PHRASE_PREFIX) == true -> {
-                if (::quickPhraseOverlay.isInitialized) quickPhraseOverlay.hide()
+                if (::promptOverlay.isInitialized) promptOverlay.hide()
                 updateVisibility()
             }
             key?.startsWith(DiagnosticBridge.KEY_PREFIX) == true -> Unit
@@ -175,6 +177,7 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
             return
         }
         executor.stop()
+        promptOverlay.hide()
         overlay.showTargetPicker(candidates) { selected ->
             prefs.setTargetSignature(appPackage, selected.signature)
             prefs.updateProfile(appPackage) { it.copy(scrollMethod = ScrollMethod.LOCKED) }
@@ -257,7 +260,7 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
     }
 
     private fun updateVisibility() {
-        if (!::prefs.isInitialized || !::overlay.isInitialized || !::quickPhraseOverlay.isInitialized) return
+        if (!::prefs.isInitialized || !::overlay.isInitialized || !::promptOverlay.isInitialized) return
         val power = getSystemService(PowerManager::class.java)
         val foreground = currentForegroundPackage()
         val allowed = foreground != null && prefs.isAllowed(foreground, packageName)
@@ -265,11 +268,11 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
             prefs.hideUntilMs <= System.currentTimeMillis() && !hasBlockingSystemSurface()
         if (visible) {
             overlay.show()
-            if (foreground != packageName) quickPhraseOverlay.show() else quickPhraseOverlay.hide()
+            if (foreground == packageName) promptOverlay.hide()
         } else {
             executor.stop()
             overlay.hide()
-            quickPhraseOverlay.hide()
+            promptOverlay.hide()
         }
     }
 
