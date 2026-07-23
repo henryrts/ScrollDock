@@ -21,14 +21,8 @@ enum class MessageDirection { PREVIOUS, NEXT }
 enum class StepResult { MOVED, EDGE, FAILED }
 
 fun ScrollCommand.scrollDirectionOrNull(): ScrollDirection? = when (this) {
-    ScrollCommand.PAGE_UP,
-    ScrollCommand.TOP,
-    -> ScrollDirection.UP
-
-    ScrollCommand.PAGE_DOWN,
-    ScrollCommand.BOTTOM,
-    -> ScrollDirection.DOWN
-
+    ScrollCommand.PAGE_UP, ScrollCommand.TOP -> ScrollDirection.UP
+    ScrollCommand.PAGE_DOWN, ScrollCommand.BOTTOM -> ScrollDirection.DOWN
     else -> null
 }
 
