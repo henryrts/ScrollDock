@@ -26,6 +26,7 @@ class OverlayController(
     private val commandSink: (ScrollCommand) -> Unit,
     private val continuousStart: (ScrollDirection) -> Unit,
     private val stop: () -> Unit,
+    private val promptToggle: () -> Unit,
 ) {
     private val windowManager = service.getSystemService(WindowManager::class.java)
     private val handler = Handler(Looper.getMainLooper())
@@ -36,7 +37,6 @@ class OverlayController(
     private var activeCommand: ScrollCommand? = null
     private val buttons = mutableMapOf<ScrollCommand, TextView>()
     private var showing = false
-    private var lastHandleTapMs = 0L
 
     fun show() {
         if (showing || !prefs.overlayEnabled || prefs.hideUntilMs > System.currentTimeMillis()) return
@@ -44,13 +44,12 @@ class OverlayController(
         root = buildOverlay(profile)
         val view = root ?: return
         val screen = service.availableAppBounds()
-        val isLandscape = service.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val landscape = service.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         val appPackage = service.currentForegroundPackage()
-        val saved = prefs.getPosition(appPackage, isLandscape)
-        val controlCount = if (profile.messageButtonsEnabled) 7 else 5
-        val sizeEstimate = profile.buttonSizeDp * controlCount
+        val saved = prefs.getPosition(appPackage, landscape)
+        val estimatedHeight = profile.buttonSizeDp * 2 + HANDLE_SIZE_DP + PROMPT_SIZE_DP + 20
         val initialX = saved.first ?: (screen.right - service.dp(profile.buttonSizeDp + 8))
-        val initialY = saved.second ?: (screen.centerY() - service.dp(sizeEstimate / 2))
+        val initialY = saved.second ?: (screen.centerY() - service.dp(estimatedHeight / 2))
         params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -111,7 +110,6 @@ class OverlayController(
     }
 
     fun messageEdge(direction: MessageDirection, role: MessageRole) {
-        root?.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
         val roleLabel = when (role) {
             MessageRole.USER -> "user message"
             MessageRole.ASSISTANT -> "assistant response"
@@ -122,13 +120,7 @@ class OverlayController(
 
     fun timeout(direction: ScrollDirection) {
         root?.performHapticFeedback(HapticFeedbackConstants.REJECT)
-        toast(
-            if (direction == ScrollDirection.UP) {
-                "Stopped after safety limit before confirming the top"
-            } else {
-                "Stopped after safety limit before confirming the bottom"
-            }
-        )
+        toast(if (direction == ScrollDirection.UP) "Super Up stopped at the safety limit" else "Scroll stopped at the safety limit")
     }
 
     fun failure() {
@@ -147,14 +139,14 @@ class OverlayController(
     ) {
         hideMenu()
         hideTargetPicker()
-        val screenRect = service.availableAppBounds()
+        val screen = service.availableAppBounds()
         val full = FrameLayout(service).apply {
             setBackgroundColor(0x55000000)
             isClickable = true
             setOnClickListener { hideTargetPicker() }
         }
         val banner = TextView(service).apply {
-            text = "Choose the area ScrollDock should control\nTap an outline. Tap outside to cancel."
+            text = "Choose scroll area\nTap an outline"
             textSize = 16f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
@@ -170,12 +162,11 @@ class OverlayController(
                 topMargin = service.dp(20)
             },
         )
-
         candidates.forEachIndexed { index, candidate ->
-            val clippedLeft = candidate.bounds.left.coerceIn(screenRect.left, screenRect.right)
-            val clippedTop = candidate.bounds.top.coerceIn(screenRect.top, screenRect.bottom)
-            val clippedRight = candidate.bounds.right.coerceIn(clippedLeft + 1, screenRect.right)
-            val clippedBottom = candidate.bounds.bottom.coerceIn(clippedTop + 1, screenRect.bottom)
+            val left = candidate.bounds.left.coerceIn(screen.left, screen.right)
+            val top = candidate.bounds.top.coerceIn(screen.top, screen.bottom)
+            val right = candidate.bounds.right.coerceIn(left + 1, screen.right)
+            val bottom = candidate.bounds.bottom.coerceIn(top + 1, screen.bottom)
             val marker = TextView(service).apply {
                 text = "${index + 1}  ${candidate.label}"
                 textSize = 13f
@@ -192,16 +183,15 @@ class OverlayController(
             full.addView(
                 marker,
                 FrameLayout.LayoutParams(
-                    (clippedRight - clippedLeft).coerceAtLeast(service.dp(48)),
-                    (clippedBottom - clippedTop).coerceAtLeast(service.dp(48)),
+                    (right - left).coerceAtLeast(service.dp(48)),
+                    (bottom - top).coerceAtLeast(service.dp(48)),
                 ).apply {
                     gravity = Gravity.TOP or Gravity.START
-                    leftMargin = clippedLeft
-                    topMargin = clippedTop
+                    leftMargin = left
+                    topMargin = top
                 },
             )
         }
-
         val windowParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -218,78 +208,87 @@ class OverlayController(
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             alpha = profile.opacityPercent / 100f
-            background = roundedBackground(0xE61D2433.toInt(), 16)
-            setPadding(service.dp(4), service.dp(4), service.dp(4), service.dp(4))
+            background = roundedBackground(0xE61D2433.toInt(), 14)
+            setPadding(service.dp(3), service.dp(3), service.dp(3), service.dp(3))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         }
         buttons.clear()
-        val handle = control("⋮", "ScrollDock handle", profile.buttonSizeDp).apply {
+
+        val handle = control("⋮", "Move ScrollDock", HANDLE_SIZE_DP, 20f).apply {
             setOnTouchListener(DragTouchListener())
         }
         container.addView(handle)
-        if (!profile.collapsed) {
-            val commands = buildList {
-                add(ScrollCommand.TOP)
-                add(ScrollCommand.PAGE_UP)
-                if (profile.messageButtonsEnabled) add(ScrollCommand.PREVIOUS_MESSAGE)
-                if (profile.messageButtonsEnabled) add(ScrollCommand.NEXT_MESSAGE)
-                add(ScrollCommand.PAGE_DOWN)
-                add(ScrollCommand.BOTTOM)
+
+        val superUp = control("⇈", "Super Up: keep scrolling toward the top", profile.buttonSizeDp, 24f)
+        configureActionButton(superUp, ScrollCommand.TOP)
+        buttons[ScrollCommand.TOP] = superUp
+        container.addView(superUp)
+
+        val down = control("↓", service.getString(R.string.page_down), profile.buttonSizeDp, 24f)
+        configureDownButton(down)
+        buttons[ScrollCommand.PAGE_DOWN] = down
+        container.addView(down)
+
+        val prompt = control("P", "Quick prompts", PROMPT_SIZE_DP, 14f).apply {
+            setOnClickListener {
+                stop()
+                promptToggle()
             }
-            commands.forEach { command ->
-                val button = control(symbol(command), label(command), profile.buttonSizeDp)
-                configureCommandButton(button, command)
-                buttons[command] = button
-                container.addView(button)
+            setOnLongClickListener {
+                service.startActivity(
+                    Intent(service, QuickPhrasesActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+                true
             }
         }
+        container.addView(prompt)
         return container
     }
 
-    private fun configureCommandButton(button: TextView, command: ScrollCommand) {
-        if (command == ScrollCommand.PAGE_UP || command == ScrollCommand.PAGE_DOWN) {
-            var downAt = 0L
-            var longPressed = false
-            val direction = if (command == ScrollCommand.PAGE_UP) ScrollDirection.UP else ScrollDirection.DOWN
-            val longPressRunnable = Runnable {
-                longPressed = true
-                continuousStart(direction)
-            }
-            button.setOnTouchListener { _, event ->
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        downAt = event.eventTime
-                        longPressed = false
-                        handler.postDelayed(longPressRunnable, 450L)
-                        true
-                    }
-                    MotionEvent.ACTION_UP -> {
-                        handler.removeCallbacks(longPressRunnable)
-                        if (longPressed) stop() else if (event.eventTime - downAt < 450L) commandSink(command)
-                        true
-                    }
-                    MotionEvent.ACTION_CANCEL -> {
-                        handler.removeCallbacks(longPressRunnable)
-                        if (longPressed) stop()
-                        true
-                    }
-                    else -> true
+    private fun configureActionButton(button: TextView, command: ScrollCommand) {
+        button.setOnClickListener {
+            if (activeCommand == command) commandSink(ScrollCommand.STOP) else commandSink(command)
+        }
+    }
+
+    private fun configureDownButton(button: TextView) {
+        var downAt = 0L
+        var longPressed = false
+        val longPress = Runnable {
+            longPressed = true
+            continuousStart(ScrollDirection.DOWN)
+        }
+        button.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downAt = event.eventTime
+                    longPressed = false
+                    handler.postDelayed(longPress, LONG_PRESS_MS)
+                    true
                 }
-            }
-        } else {
-            button.setOnClickListener {
-                if (activeCommand == command) commandSink(ScrollCommand.STOP) else commandSink(command)
+                MotionEvent.ACTION_UP -> {
+                    handler.removeCallbacks(longPress)
+                    if (longPressed) stop() else if (event.eventTime - downAt < LONG_PRESS_MS) commandSink(ScrollCommand.PAGE_DOWN)
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    handler.removeCallbacks(longPress)
+                    if (longPressed) stop()
+                    true
+                }
+                else -> true
             }
         }
     }
 
-    private fun control(text: String, description: String, sizeDp: Int): TextView = TextView(service).apply {
+    private fun control(text: String, description: String, sizeDp: Int, textSp: Float): TextView = TextView(service).apply {
         this.text = text
         contentDescription = description
-        textSize = if (text == "⋮") 25f else 23f
+        textSize = textSp
         gravity = Gravity.CENTER
         setTextColor(Color.WHITE)
-        background = roundedBackground(0x66FFFFFF, 12)
+        background = roundedBackground(0x66FFFFFF, 10)
         isClickable = true
         isFocusable = true
         layoutParams = LinearLayout.LayoutParams(service.dp(sizeDp), service.dp(sizeDp)).apply {
@@ -303,37 +302,31 @@ class OverlayController(
             hideMenu()
             return
         }
-        val profile = service.currentProfile()
-        val appPackage = service.currentForegroundPackage()
         val full = FrameLayout(service).apply {
             setBackgroundColor(Color.TRANSPARENT)
             setOnClickListener { hideMenu() }
         }
         val panel = LinearLayout(service).apply {
             orientation = LinearLayout.VERTICAL
-            background = roundedBackground(0xF21D2433.toInt(), 16)
+            background = roundedBackground(0xF21D2433.toInt(), 14)
             setPadding(service.dp(8), service.dp(8), service.dp(8), service.dp(8))
             setOnClickListener { }
         }
-        fun item(label: String, action: () -> Unit): TextView = TextView(service).apply {
-            text = label
+        fun item(textValue: String, action: () -> Unit): TextView = TextView(service).apply {
+            text = textValue
             textSize = 16f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER_VERTICAL
             setPadding(service.dp(16), 0, service.dp(16), 0)
-            layoutParams = LinearLayout.LayoutParams(service.dp(230), service.dp(48))
-            setOnClickListener { hideMenu(); action() }
+            layoutParams = LinearLayout.LayoutParams(service.dp(220), service.dp(46))
+            setOnClickListener {
+                hideMenu()
+                action()
+            }
         }
-        panel.addView(item(if (profile.collapsed) "Expand" else "Collapse") {
-            appPackage?.let { pkg -> prefs.updateProfile(pkg) { it.copy(collapsed = !it.collapsed) } }
-        })
         panel.addView(item("Choose scroll area") { service.beginTargetSelection() })
-        panel.addView(item("Use automatic target") { service.setTargetMode(ScrollMethod.AUTO) })
-        panel.addView(item("Use gesture only") { service.setTargetMode(ScrollMethod.GESTURE_ONLY) })
-        panel.addView(item("Previous user message") { commandSink(ScrollCommand.PREVIOUS_USER_MESSAGE) })
-        panel.addView(item("Previous assistant response") { commandSink(ScrollCommand.PREVIOUS_ASSISTANT_MESSAGE) })
-        panel.addView(item("Next user message") { commandSink(ScrollCommand.NEXT_USER_MESSAGE) })
-        panel.addView(item("Next assistant response") { commandSink(ScrollCommand.NEXT_ASSISTANT_MESSAGE) })
+        panel.addView(item("Automatic target") { service.setTargetMode(ScrollMethod.AUTO) })
+        panel.addView(item("Gesture only") { service.setTargetMode(ScrollMethod.GESTURE_ONLY) })
         panel.addView(item("Hide for 10 minutes") { service.hideTemporarily(10 * 60 * 1000L) })
         panel.addView(item("Hide in this app") {
             service.currentForegroundPackage()?.let { pkg ->
@@ -342,27 +335,22 @@ class OverlayController(
                     service.refreshScope()
                 }
             }
-            stop()
-            hide()
         })
         panel.addView(item("Open settings") {
-            service.startActivity(Intent(service, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            service.startActivity(Intent(service, FirstReleaseActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         })
-        panel.addView(item("Disable overlay") {
-            prefs.overlayEnabled = false
-            stop()
-            hide()
-        })
+        panel.addView(item("Turn controls off") { prefs.overlayEnabled = false })
+
         val anchor = bounds()
         val screen = service.availableAppBounds()
-        val panelWidth = service.dp(246)
+        val panelWidth = service.dp(236)
         val left = if ((anchor?.centerX() ?: screen.centerX()) > screen.centerX()) {
             ((anchor?.left ?: screen.right) - panelWidth - service.dp(8)).coerceAtLeast(service.dp(8))
         } else {
             ((anchor?.right ?: screen.left) + service.dp(8)).coerceAtMost(screen.right - panelWidth - service.dp(8))
         }
         val top = (anchor?.top ?: service.dp(100))
-            .coerceIn(service.dp(8), (screen.bottom - service.dp(600)).coerceAtLeast(service.dp(8)))
+            .coerceIn(service.dp(8), (screen.bottom - service.dp(330)).coerceAtLeast(service.dp(8)))
         full.addView(
             panel,
             FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -394,21 +382,21 @@ class OverlayController(
 
     private fun clampAndPersist() {
         val view = root ?: return
-        val lp = params ?: return
+        val layout = params ?: return
         val screen = service.availableAppBounds()
         val clamped = OverlayBounds.clamp(
-            lp.x,
-            lp.y,
+            layout.x,
+            layout.y,
             view.width,
             view.height,
             IntBounds(screen.left, screen.top, screen.right, screen.bottom),
             service.dp(8),
         )
-        lp.x = clamped.first
-        lp.y = clamped.second
-        runCatching { windowManager.updateViewLayout(view, lp) }
+        layout.x = clamped.first
+        layout.y = clamped.second
+        runCatching { windowManager.updateViewLayout(view, layout) }
         val landscape = service.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        prefs.setPosition(service.currentForegroundPackage(), landscape, lp.x, lp.y)
+        prefs.setPosition(service.currentForegroundPackage(), landscape, layout.x, layout.y)
     }
 
     private inner class DragTouchListener : View.OnTouchListener {
@@ -417,26 +405,20 @@ class OverlayController(
         private var touchX = 0f
         private var touchY = 0f
         private var dragged = false
-        private var longPressed = false
         private val longPress = Runnable {
-            if (!dragged) {
-                longPressed = true
-                showMenu()
-            }
+            if (!dragged) showMenu()
         }
 
         override fun onTouch(view: View, event: MotionEvent): Boolean {
-            val lp = params ?: return false
+            val layout = params ?: return false
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    startX = lp.x
-                    startY = lp.y
+                    startX = layout.x
+                    startY = layout.y
                     touchX = event.rawX
                     touchY = event.rawY
                     dragged = false
-                    longPressed = false
                     handler.postDelayed(longPress, 550L)
-                    return true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (event.rawX - touchX).toInt()
@@ -447,43 +429,25 @@ class OverlayController(
                         stop()
                     }
                     if (dragged) {
-                        lp.x = startX + dx
-                        lp.y = startY + dy
-                        root?.let { current -> runCatching { windowManager.updateViewLayout(current, lp) } }
+                        layout.x = startX + dx
+                        layout.y = startY + dy
+                        root?.let { current -> runCatching { windowManager.updateViewLayout(current, layout) } }
                     }
-                    return true
                 }
                 MotionEvent.ACTION_UP -> {
                     handler.removeCallbacks(longPress)
-                    if (dragged) {
-                        clampAndPersist()
-                    } else if (!longPressed) {
-                        val now = event.eventTime
-                        val appPackage = service.currentForegroundPackage()
-                        val profile = service.currentProfile()
-                        if (profile.collapsed) {
-                            appPackage?.let { pkg -> prefs.updateProfile(pkg) { it.copy(collapsed = false) } }
-                        } else if (now - lastHandleTapMs <= 320L) {
-                            appPackage?.let { pkg -> prefs.updateProfile(pkg) { it.copy(collapsed = true) } }
-                            lastHandleTapMs = 0L
-                        } else {
-                            lastHandleTapMs = now
-                        }
-                    }
-                    return true
+                    if (dragged) clampAndPersist()
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     handler.removeCallbacks(longPress)
                     if (dragged) clampAndPersist()
-                    return true
                 }
             }
             return true
         }
     }
 
-    private fun toast(message: String) =
-        Toast.makeText(service, message, Toast.LENGTH_SHORT).show()
+    private fun toast(message: String) = Toast.makeText(service, message, Toast.LENGTH_SHORT).show()
 
     private fun roundedBackground(color: Int, radiusDp: Int) = GradientDrawable().apply {
         setColor(color)
@@ -498,22 +462,22 @@ class OverlayController(
 
     private fun symbol(command: ScrollCommand): String = when (command) {
         ScrollCommand.TOP -> "⇈"
-        ScrollCommand.PAGE_UP -> "↑"
-        ScrollCommand.PREVIOUS_MESSAGE -> "‹"
-        ScrollCommand.NEXT_MESSAGE -> "›"
         ScrollCommand.PAGE_DOWN -> "↓"
+        ScrollCommand.PAGE_UP -> "↑"
         ScrollCommand.BOTTOM -> "⇊"
         ScrollCommand.STOP -> "■"
+        ScrollCommand.PREVIOUS_MESSAGE,
         ScrollCommand.PREVIOUS_USER_MESSAGE,
         ScrollCommand.PREVIOUS_ASSISTANT_MESSAGE -> "‹"
+        ScrollCommand.NEXT_MESSAGE,
         ScrollCommand.NEXT_USER_MESSAGE,
         ScrollCommand.NEXT_ASSISTANT_MESSAGE -> "›"
     }
 
     private fun label(command: ScrollCommand): String = when (command) {
-        ScrollCommand.TOP -> service.getString(R.string.top)
-        ScrollCommand.PAGE_UP -> service.getString(R.string.page_up)
+        ScrollCommand.TOP -> "Super Up"
         ScrollCommand.PAGE_DOWN -> service.getString(R.string.page_down)
+        ScrollCommand.PAGE_UP -> service.getString(R.string.page_up)
         ScrollCommand.BOTTOM -> service.getString(R.string.bottom)
         ScrollCommand.STOP -> service.getString(R.string.stop)
         ScrollCommand.PREVIOUS_MESSAGE -> "Previous message"
@@ -522,5 +486,11 @@ class OverlayController(
         ScrollCommand.NEXT_USER_MESSAGE -> "Next user message"
         ScrollCommand.PREVIOUS_ASSISTANT_MESSAGE -> "Previous assistant response"
         ScrollCommand.NEXT_ASSISTANT_MESSAGE -> "Next assistant response"
+    }
+
+    companion object {
+        private const val HANDLE_SIZE_DP = 28
+        private const val PROMPT_SIZE_DP = 30
+        private const val LONG_PRESS_MS = 450L
     }
 }
