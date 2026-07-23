@@ -47,7 +47,7 @@ class OverlayController(
         val landscape = service.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         val appPackage = service.currentForegroundPackage()
         val saved = prefs.getPosition(appPackage, landscape)
-        val estimatedHeight = profile.buttonSizeDp * 2 + HANDLE_SIZE_DP + PROMPT_SIZE_DP + 20
+        val estimatedHeight = profile.buttonSizeDp * 3 + HANDLE_SIZE_DP + PROMPT_SIZE_DP + 24
         val initialX = saved.first ?: (screen.right - service.dp(profile.buttonSizeDp + 8))
         val initialY = saved.second ?: (screen.centerY() - service.dp(estimatedHeight / 2))
         params = WindowManager.LayoutParams(
@@ -120,7 +120,13 @@ class OverlayController(
 
     fun timeout(direction: ScrollDirection) {
         root?.performHapticFeedback(HapticFeedbackConstants.REJECT)
-        toast(if (direction == ScrollDirection.UP) "Super Up stopped at the safety limit" else "Scroll stopped at the safety limit")
+        toast(
+            if (direction == ScrollDirection.UP) {
+                "Super Up stopped at the safety limit"
+            } else {
+                "Super Down stopped at the safety limit"
+            },
+        )
     }
 
     fun failure() {
@@ -243,6 +249,12 @@ class OverlayController(
             }
         }
         container.addView(prompt)
+
+        val superDown = control("⇊", "Super Down: keep scrolling toward the bottom", profile.buttonSizeDp, 24f)
+        configureActionButton(superDown, ScrollCommand.BOTTOM)
+        buttons[ScrollCommand.BOTTOM] = superDown
+        container.addView(superDown)
+
         return container
     }
 
@@ -478,7 +490,7 @@ class OverlayController(
         ScrollCommand.TOP -> "Super Up"
         ScrollCommand.PAGE_DOWN -> service.getString(R.string.page_down)
         ScrollCommand.PAGE_UP -> service.getString(R.string.page_up)
-        ScrollCommand.BOTTOM -> service.getString(R.string.bottom)
+        ScrollCommand.BOTTOM -> "Super Down"
         ScrollCommand.STOP -> service.getString(R.string.stop)
         ScrollCommand.PREVIOUS_MESSAGE -> "Previous message"
         ScrollCommand.NEXT_MESSAGE -> "Next message"
