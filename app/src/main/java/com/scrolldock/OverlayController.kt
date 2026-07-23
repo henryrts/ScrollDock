@@ -47,7 +47,7 @@ class OverlayController(
         val landscape = service.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         val appPackage = service.currentForegroundPackage()
         val saved = prefs.getPosition(appPackage, landscape)
-        val estimatedHeight = profile.buttonSizeDp * 3 + HANDLE_SIZE_DP + PROMPT_SIZE_DP + 24
+        val estimatedHeight = profile.buttonSizeDp * 2 + HANDLE_SIZE_DP + PROMPT_SIZE_DP + 20
         val initialX = saved.first ?: (screen.right - service.dp(profile.buttonSizeDp + 8))
         val initialY = saved.second ?: (screen.centerY() - service.dp(estimatedHeight / 2))
         params = WindowManager.LayoutParams(
@@ -230,10 +230,10 @@ class OverlayController(
         buttons[ScrollCommand.TOP] = superUp
         container.addView(superUp)
 
-        val down = control("↓", service.getString(R.string.page_down), profile.buttonSizeDp, 24f)
-        configureDownButton(down)
-        buttons[ScrollCommand.PAGE_DOWN] = down
-        container.addView(down)
+        val superDown = control("⇊", "Super Down: keep scrolling toward the bottom", profile.buttonSizeDp, 24f)
+        configureActionButton(superDown, ScrollCommand.BOTTOM)
+        buttons[ScrollCommand.BOTTOM] = superDown
+        container.addView(superDown)
 
         val prompt = control("P", "Quick prompts", PROMPT_SIZE_DP, 14f).apply {
             setOnClickListener {
@@ -249,11 +249,6 @@ class OverlayController(
             }
         }
         container.addView(prompt)
-
-        val superDown = control("⇊", "Super Down: keep scrolling toward the bottom", profile.buttonSizeDp, 24f)
-        configureActionButton(superDown, ScrollCommand.BOTTOM)
-        buttons[ScrollCommand.BOTTOM] = superDown
-        container.addView(superDown)
 
         return container
     }
