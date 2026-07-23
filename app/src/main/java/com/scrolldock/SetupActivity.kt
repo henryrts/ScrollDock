@@ -36,7 +36,7 @@ class SetupActivity : Activity() {
         if (leavingSetup || !::prefs.isInitialized) return
 
         if (isServiceEnabled()) {
-            openMainSettings()
+            openDashboard()
             return
         }
 
@@ -99,7 +99,7 @@ class SetupActivity : Activity() {
             )
         )
 
-        root.addView(actionButton("Open ScrollDock settings", ::openMainSettings))
+        root.addView(actionButton("Open ScrollDock", ::openDashboard))
 
         refreshStatus()
         return ScrollView(this).apply {
@@ -110,7 +110,7 @@ class SetupActivity : Activity() {
     private fun advanceSetup() {
         when {
             !prefs.consentGranted -> showDisclosure()
-            isServiceEnabled() -> openMainSettings()
+            isServiceEnabled() -> openDashboard()
             else -> refreshStatus()
         }
     }
@@ -123,9 +123,10 @@ class SetupActivity : Activity() {
         val dialog = AlertDialog.Builder(this)
             .setTitle("Accessibility disclosure")
             .setMessage(
-                "ScrollDock can observe which selected app is open and interact with scrollable screen elements. " +
-                    "It uses this access only when you press a ScrollDock control. " +
-                    "It does not collect, save, or transmit screen text."
+                "ScrollDock observes which selected app is open and structural properties of scrollable screen elements " +
+                    "to show controls, perform requested actions, and produce compatibility diagnostics. " +
+                    "When you tap a Quick phrase, it temporarily reads only the focused editable field to insert text " +
+                    "without deleting existing input. It does not save or transmit screen text."
             )
             .setView(consent)
             .setNegativeButton("Exit") { _, _ -> finish() }
@@ -203,10 +204,10 @@ class SetupActivity : Activity() {
             .show()
     }
 
-    private fun openMainSettings() {
+    private fun openDashboard() {
         if (leavingSetup) return
         leavingSetup = true
-        startActivity(Intent(this, MainActivity::class.java))
+        startActivity(Intent(this, FirstReleaseActivity::class.java))
         finish()
     }
 

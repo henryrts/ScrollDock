@@ -9,22 +9,24 @@ ScrollDock uses Android Accessibility APIs to:
 1. determine whether an explicitly selected app is in the foreground;
 2. locate a visible scrollable container using structural properties and supported action identifiers;
 3. perform a scroll action after the user presses a ScrollDock control;
-4. observe non-content scroll events to determine whether movement occurred.
+4. observe non-content scroll events to determine whether movement occurred;
+5. inspect structural target metadata for compatibility diagnostics;
+6. insert a user-saved Quick phrase into the currently focused editable field after the user taps that phrase.
 
-ScrollDock does not read, copy, analyze, log, persist, or transmit text displayed by other apps.
+Structural scrolling and diagnostics do not read displayed screen text. Quick phrase insertion temporarily reads only the focused editable field so existing text and cursor selection can be preserved. That field content is not logged, persisted, analyzed or transmitted.
 
 ## Data collected
 
-None.
+None. ScrollDock has no server connection or telemetry.
 
 ## Network access
 
-The application does not request the Android `INTERNET` permission and contains no analytics, advertising, crash-reporting, or telemetry SDK.
+The application does not request the Android `INTERNET` permission and contains no analytics, advertising, crash-reporting or telemetry SDK.
 
 ## Local settings
 
-The app stores selected package identifiers, overlay position, control size, opacity, page distance, timing, disclosure consent, collapse state, and temporary hiding state. Android cloud backup is disabled. Local settings can be cleared from the app.
+The app stores selected package identifiers, overlay position, control size, opacity, page distance, timing, disclosure consent, pause state, collapse state, temporary hiding state and up to five Quick phrases. Compatibility diagnostics store only the last action name, result, failure category and timestamp. Android cloud backup is disabled. Local settings can be cleared from the app.
 
 ## Permissions not requested
 
-ScrollDock does not request screen capture, microphone, camera, location, contacts, notifications, clipboard, broad storage, or broad installed-app visibility permissions.
+ScrollDock does not request screen capture, microphone, camera, location, contacts, notifications, clipboard, broad storage or broad installed-app visibility permissions.

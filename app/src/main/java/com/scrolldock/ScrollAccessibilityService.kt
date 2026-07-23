@@ -18,6 +18,7 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
     private lateinit var resolver: ScrollableNodeResolver
     private lateinit var executor: ScrollCommandExecutor
     private lateinit var overlay: OverlayController
+    private lateinit var quickPhraseOverlay: QuickPhraseOverlayController
     private val handler = Handler(Looper.getMainLooper())
     private val observations = ArrayDeque<ScrollObservation>()
     private var foregroundPackage: String? = null
@@ -29,15 +30,30 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
 
     override fun onServiceConnected() {
         prefs = Prefs(this)
+        FeaturePrefs(this).ensureRecommendedApps(prefs)
         prefs.register(this)
         resolver = ScrollableNodeResolver(this)
         val gesture = GestureFallback(this)
         val messageNavigator = MessageNavigator(this)
+        quickPhraseOverlay = QuickPhraseOverlayController(this)
         overlay = OverlayController(
             service = this,
             prefs = prefs,
-            commandSink = { executor.execute(it) },
-            continuousStart = { executor.startContinuous(it) },
+            commandSink = { command ->
+                if (command in SCROLL_COMMANDS) {
+                    captureDiagnostics()
+                    DiagnosticBridge.markRunning(this, command)
+                }
+                executor.execute(command)
+            },
+            continuousStart = { direction ->
+                captureDiagnostics()
+                DiagnosticBridge.markRunning(
+                    this,
+                    if (direction == ScrollDirection.UP) ScrollCommand.PAGE_UP else ScrollCommand.PAGE_DOWN,
+                )
+                executor.startContinuous(direction)
+            },
             stop = { executor.stop() },
         )
         executor = ScrollCommandExecutor(
@@ -47,11 +63,24 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
             messageNavigator = messageNavigator,
             listener = object : ScrollCommandExecutor.Listener {
                 override fun onActiveCommand(command: ScrollCommand?) = overlay.updateActive(command)
-                override fun onEdge(direction: ScrollDirection) = overlay.edge(direction)
+
+                override fun onEdge(direction: ScrollDirection) {
+                    DiagnosticBridge.markEdge(this@ScrollAccessibilityService, direction)
+                    overlay.edge(direction)
+                }
+
                 override fun onMessageEdge(direction: MessageDirection, role: MessageRole) =
                     overlay.messageEdge(direction, role)
-                override fun onFailure() = overlay.failure()
-                override fun onTimeout(direction: ScrollDirection) = overlay.timeout(direction)
+
+                override fun onFailure() {
+                    DiagnosticBridge.markFailure(this@ScrollAccessibilityService)
+                    overlay.failure()
+                }
+
+                override fun onTimeout(direction: ScrollDirection) {
+                    DiagnosticBridge.markTimeout(this@ScrollAccessibilityService, direction)
+                    overlay.timeout(direction)
+                }
             },
         )
         refreshScope()
@@ -61,7 +90,10 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
-        if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) recordScrollObservation(event)
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
+            recordScrollObservation(event)
+            DiagnosticBridge.markSuccess(this)
+        }
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
             event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
         ) {
@@ -72,6 +104,7 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
                 resolver.invalidate()
             }
             updateVisibility()
+            captureDiagnostics()
         }
     }
 
@@ -84,15 +117,20 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         if (::prefs.isInitialized) prefs.unregister(this)
         if (::executor.isInitialized) executor.stop()
         if (::overlay.isInitialized) overlay.hide()
+        if (::quickPhraseOverlay.isInitialized) quickPhraseOverlay.hide()
         super.onDestroy()
     }
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
         when {
             key == "selected_packages" -> refreshScope()
-            key == "enabled" -> updateVisibility()
+            key == "enabled" || key == FeaturePrefs.KEY_PAUSED -> updateVisibility()
             key == "hide_until" -> {
                 scheduleHiddenOverlayRestore()
+                updateVisibility()
+            }
+            key?.startsWith(FeaturePrefs.QUICK_PHRASE_PREFIX) == true -> {
+                if (::quickPhraseOverlay.isInitialized) quickPhraseOverlay.hide()
                 updateVisibility()
             }
             key?.startsWith("profile.") == true -> {
@@ -173,6 +211,13 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         }
     }
 
+    fun keyboardBounds(): Rect? {
+        val keyboardWindow = windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD } ?: return null
+        val bounds = Rect()
+        keyboardWindow.getBoundsInScreen(bounds)
+        return bounds.takeIf { !it.isEmpty }
+    }
+
     fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private fun recordScrollObservation(event: AccessibilityEvent) {
@@ -208,17 +253,19 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
     }
 
     private fun updateVisibility() {
-        if (!::prefs.isInitialized || !::overlay.isInitialized) return
+        if (!::prefs.isInitialized || !::overlay.isInitialized || !::quickPhraseOverlay.isInitialized) return
         val power = getSystemService(PowerManager::class.java)
         val foreground = currentForegroundPackage()
         val allowed = foreground != null && prefs.isAllowed(foreground, packageName)
-        val visible = prefs.consentGranted && prefs.overlayEnabled && allowed && power.isInteractive &&
+        val visible = prefs.consentGranted && prefs.overlayEnabled && !FeaturePrefs(this).paused && allowed && power.isInteractive &&
             prefs.hideUntilMs <= System.currentTimeMillis() && !hasBlockingSystemSurface()
         if (visible) {
             overlay.show()
+            if (foreground != packageName) quickPhraseOverlay.show() else quickPhraseOverlay.hide()
         } else {
             executor.stop()
             overlay.hide()
+            quickPhraseOverlay.hide()
         }
     }
 
@@ -230,6 +277,45 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
             ?: rootInActiveWindow?.packageName?.toString()
     }
 
+    private fun captureDiagnostics() {
+        val appPackage = currentForegroundPackage()
+        if (appPackage.isNullOrBlank() || appPackage == packageName || !prefs.selectedPackages().contains(appPackage)) return
+        DiagnosticBridge.capture(this, buildDiagnosticTargetReport())
+    }
+
+    private fun buildDiagnosticTargetReport(): String {
+        val appPackage = currentForegroundPackage()
+        val profile = currentProfile()
+        val root = rootInActiveWindow
+        val node = root?.let {
+            resolver.resolve(it, ScrollDirection.DOWN) ?: resolver.resolve(it, ScrollDirection.UP)
+        }
+        val fingerprint = node?.let(resolver::fingerprint)
+        val bounds = fingerprint?.bounds
+        val keyboard = keyboardBounds()
+        val actions = node?.actionList?.map { it.id }.orEmpty()
+        val method = when (profile.scrollMethod) {
+            ScrollMethod.AUTO -> "Automatic semantic target, then gesture fallback"
+            ScrollMethod.LOCKED -> "Locked semantic target, then gesture fallback"
+            ScrollMethod.GESTURE_ONLY -> "Gesture only"
+        }
+
+        return buildString {
+            appendLine("ScrollDock compatibility diagnostics")
+            appendLine("Package: ${appPackage ?: "None"}")
+            appendLine("Selected node: ${node?.className ?: "None"}")
+            appendLine("View ID: ${node?.viewIdResourceName ?: "None"}")
+            appendLine("Node bounds: ${bounds?.let(::formatBounds) ?: "None"}")
+            appendLine("Available scroll actions: ${DiagnosticBridge.describeActions(actions)}")
+            appendLine("Chosen method: $method")
+            appendLine("Keyboard bounds: ${keyboard?.let { "${it.left},${it.top},${it.right},${it.bottom}" } ?: "Hidden"}")
+            append("Target signature: ${DiagnosticBridge.targetSignature(fingerprint)}")
+        }
+    }
+
+    private fun formatBounds(bounds: IntBounds): String =
+        "${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}"
+
     private fun hasBlockingSystemSurface(): Boolean = windows.any { window ->
         window.isActive && window.type == AccessibilityWindowInfo.TYPE_SYSTEM &&
             window.root?.packageName?.toString() in setOf("com.android.systemui", "android")
@@ -237,5 +323,11 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
 
     companion object {
         private const val MAX_OBSERVATIONS = 24
+        private val SCROLL_COMMANDS = setOf(
+            ScrollCommand.PAGE_UP,
+            ScrollCommand.PAGE_DOWN,
+            ScrollCommand.TOP,
+            ScrollCommand.BOTTOM,
+        )
     }
 }
