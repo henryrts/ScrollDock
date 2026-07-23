@@ -240,7 +240,7 @@ class ScrollCommandExecutor(
     companion object {
         private const val ACTION_SETTLE_MS = 300L
         private const val GESTURE_SETTLE_MS = 480L
-        private const val MAX_DURATION_MS = 6_000L
-        private const val MAX_ATTEMPTS = 30
+        private const val MAX_DURATION_MS = 60_000L
+        private const val MAX_ATTEMPTS = 300
     }
 }
