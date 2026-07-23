@@ -4,9 +4,9 @@ ScrollDock is an offline Android accessibility app that adds compact movable nav
 
 ## Version
 
-Current app version: **0.3.2**
+Current app version: **0.3.3**
 
-GitHub Actions reads `versionName` from `app/build.gradle.kts` and publishes the matching file name, such as `ScrollDock-v0.3.2.apk`.
+GitHub Actions reads `versionName` from `app/build.gradle.kts` and publishes the matching file name, such as `ScrollDock-v0.3.3.apk`.
 
 ## First release feature set
 
@@ -40,7 +40,7 @@ Verified Android package identifiers:
 
 ### Quick prompts
 
-Store up to five local prompts. They stay hidden until the compact **P** button below **Down** is tapped.
+Store up to five local prompts. They stay hidden until the compact **P** button directly below **Down** is tapped.
 
 - maximum label length: 16 characters
 - maximum phrase length: 5,000 characters
@@ -66,7 +66,8 @@ On Android 13 and later, ScrollDock can request that the tile be added. Earlier 
 - **Move**: drag the small handle. Long-press it for target and visibility settings.
 - **Super Up**: tap once to keep scrolling toward the top. Tap again to stop.
 - **Down**: tap for one page. Hold for continuous downward scrolling; release to stop.
-- **P**: opens the compact prompt list below Down. Long-press to edit prompts.
+- **P**: opens the compact prompt list directly below Down. Long-press to edit prompts.
+- **Super Down**: tap once to keep scrolling toward the bottom. Tap again to stop.
 - The dashboard switch turns floating controls on or off directly in the app.
 
 ## Reliable navigation
