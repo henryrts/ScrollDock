@@ -90,7 +90,7 @@ class FirstReleaseActivity : BaseSettingsActivity() {
         root.addView(actionButton("Edit five Quick prompts") {
             startActivity(Intent(this, QuickPhrasesActivity::class.java))
         })
-        root.addView(body("Tap the small P button below Down to open prompts. Long-press P to edit them."))
+        root.addView(body("Tap the small P button below Super Down to open prompts. Long-press P to edit them."))
 
         root.addView(section("Compatibility diagnostics"))
         root.addView(body("Inspect the current structural scroll target, supported actions, method, keyboard bounds, target signature and last failure without collecting screen text."))
@@ -291,7 +291,7 @@ class QuickPhrasesActivity : BaseSettingsActivity() {
     private fun buildContent(): View {
         val root = pageRoot()
         root.addView(title("Quick prompts"))
-        root.addView(body("Store up to five local prompts. Tap P below Down to open them. ScrollDock never presses Send."))
+        root.addView(body("Store up to five local prompts. Tap P below Super Down to open them. ScrollDock never presses Send."))
 
         features.quickPhrases().forEachIndexed { index, phrase ->
             root.addView(section("Prompt ${index + 1}"))
