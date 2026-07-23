@@ -21,15 +21,19 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import java.security.MessageDigest
+import java.text.DateFormat
 import java.util.ArrayDeque
+import java.util.Date
 
 object DiagnosticBridge {
+    const val KEY_PREFIX = "diagnostics."
+
     fun capture(context: Context, targetReport: String) {
         store(context).edit().putString(KEY_TARGET_REPORT, targetReport).apply()
     }
 
     fun markRunning(context: Context, command: ScrollCommand) {
-        save(context, result = "RUNNING", failure = "None", action = command.name)
+        save(context, result = "RUNNING", failureCode = "NONE", failure = "None", action = command.name)
     }
 
     fun markSuccess(context: Context) {
@@ -38,6 +42,7 @@ object DiagnosticBridge {
             save(
                 context,
                 result = "SUCCESS",
+                failureCode = "NONE",
                 failure = "None",
                 action = store.getString(KEY_ACTION, "Unknown").orEmpty(),
             )
@@ -45,15 +50,33 @@ object DiagnosticBridge {
     }
 
     fun markEdge(context: Context, direction: ScrollDirection) {
-        save(context, result = "EDGE", failure = "No position change; ${direction.name.lowercase()} edge reached", action = currentAction(context))
+        save(
+            context,
+            result = "EDGE",
+            failureCode = "EDGE_REACHED",
+            failure = "No position change; ${direction.name.lowercase()} edge reached",
+            action = currentAction(context),
+        )
     }
 
     fun markFailure(context: Context) {
-        save(context, result = "FAILED", failure = "No compatible scroll target or action succeeded", action = currentAction(context))
+        save(
+            context,
+            result = "FAILED",
+            failureCode = "NO_SCROLL_TARGET_OR_ACTION",
+            failure = "No compatible scroll target or action succeeded",
+            action = currentAction(context),
+        )
     }
 
     fun markTimeout(context: Context, direction: ScrollDirection) {
-        save(context, result = "TIMEOUT", failure = "Safety limit reached before confirming the ${direction.name.lowercase()} edge", action = currentAction(context))
+        save(
+            context,
+            result = "TIMEOUT",
+            failureCode = "SAFETY_TIMEOUT",
+            failure = "Safety limit reached before confirming the ${direction.name.lowercase()} edge",
+            action = currentAction(context),
+        )
     }
 
     fun report(context: Context): String = buildString {
@@ -64,11 +87,13 @@ object DiagnosticBridge {
 
     fun statusLines(context: Context): List<String> {
         val store = store(context)
+        val updated = store.getLong(KEY_UPDATED, 0L)
         return listOf(
             "Last action: ${store.getString(KEY_ACTION, "None")}",
             "Last result: ${store.getString(KEY_RESULT, "No action recorded")}",
+            "Failure code: ${store.getString(KEY_FAILURE_CODE, "NONE")}",
             "Failure reason: ${store.getString(KEY_FAILURE, "None")}",
-            "Updated: ${store.getLong(KEY_UPDATED, 0L).takeIf { it > 0L } ?: "Never"}",
+            "Updated: ${if (updated > 0L) DateFormat.getDateTimeInstance().format(Date(updated)) else "Never"}",
         )
     }
 
@@ -107,9 +132,16 @@ object DiagnosticBridge {
         }
     }
 
-    private fun save(context: Context, result: String, failure: String, action: String) {
+    private fun save(
+        context: Context,
+        result: String,
+        failureCode: String,
+        failure: String,
+        action: String,
+    ) {
         store(context).edit()
             .putString(KEY_RESULT, result)
+            .putString(KEY_FAILURE_CODE, failureCode)
             .putString(KEY_FAILURE, failure)
             .putString(KEY_ACTION, action)
             .putLong(KEY_UPDATED, System.currentTimeMillis())
@@ -124,15 +156,17 @@ object DiagnosticBridge {
         append("Target snapshot: No external app captured yet")
     }
 
-    private fun store(context: Context) =
-        context.getSharedPreferences(DIAGNOSTIC_STORE_NAME, Context.MODE_PRIVATE)
+    private fun store(context: Context) = context.getSharedPreferences(FeaturePrefs.STORE_NAME, Context.MODE_PRIVATE).also {
+        context.getSharedPreferences(LEGACY_DIAGNOSTIC_STORE_NAME, Context.MODE_PRIVATE).edit().clear().apply()
+    }
 
-    private const val DIAGNOSTIC_STORE_NAME = "scroll_dock_diagnostics"
-    private const val KEY_TARGET_REPORT = "diagnostics.target_report"
-    private const val KEY_RESULT = "diagnostics.last_result"
-    private const val KEY_FAILURE = "diagnostics.last_failure"
-    private const val KEY_ACTION = "diagnostics.last_action"
-    private const val KEY_UPDATED = "diagnostics.updated"
+    private const val LEGACY_DIAGNOSTIC_STORE_NAME = "scroll_dock_diagnostics"
+    private const val KEY_TARGET_REPORT = "${KEY_PREFIX}target_report"
+    private const val KEY_RESULT = "${KEY_PREFIX}last_result"
+    private const val KEY_FAILURE_CODE = "${KEY_PREFIX}failure_code"
+    private const val KEY_FAILURE = "${KEY_PREFIX}last_failure"
+    private const val KEY_ACTION = "${KEY_PREFIX}last_action"
+    private const val KEY_UPDATED = "${KEY_PREFIX}updated"
 }
 
 class QuickPhraseOverlayController(private val service: ScrollAccessibilityService) {
@@ -216,21 +250,20 @@ class QuickPhraseOverlayController(private val service: ScrollAccessibilityServi
             return
         }
 
-        val current = node.text?.toString().orEmpty()
-        val rawStart = node.textSelectionStart
-        val rawEnd = node.textSelectionEnd
-        val start = if (rawStart in 0..current.length) rawStart else current.length
-        val end = if (rawEnd in start..current.length) rawEnd else start
-        val replacement = current.substring(0, start) + phrase + current.substring(end)
+        val insertion = QuickPhraseText.insert(
+            current = node.text?.toString().orEmpty(),
+            phrase = phrase,
+            rawStart = node.textSelectionStart,
+            rawEnd = node.textSelectionEnd,
+        )
         val setText = Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, replacement)
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, insertion.text)
         }
         val inserted = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, setText)
         if (inserted) {
-            val cursor = (start + phrase.length).coerceAtMost(replacement.length)
             val selection = Bundle().apply {
-                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor)
-                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, insertion.cursor)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, insertion.cursor)
             }
             node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selection)
             Toast.makeText(service, "Phrase inserted", Toast.LENGTH_SHORT).show()
