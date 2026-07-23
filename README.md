@@ -1,12 +1,12 @@
 # ScrollDock
 
-ScrollDock is an offline Android accessibility app that adds movable navigation and one-tap Quick phrase controls to selected apps.
+ScrollDock is an offline Android accessibility app that adds compact movable navigation and one-tap Quick prompt controls to selected apps.
 
 ## Version
 
-Current app version: **0.3.1**
+Current app version: **0.3.2**
 
-GitHub Actions reads `versionName` from `app/build.gradle.kts` and publishes the matching file name, such as `ScrollDock-v0.3.1.apk`.
+GitHub Actions reads `versionName` from `app/build.gradle.kts` and publishes the matching file name, such as `ScrollDock-v0.3.2.apk`.
 
 ## First release feature set
 
@@ -38,9 +38,9 @@ Verified Android package identifiers:
 - DeepSeek: `com.deepseek.chat`
 - Kimi: `com.moonshot.kimichat`
 
-### Quick phrases
+### Quick prompts
 
-Store up to five local prompts. Every configured phrase appears as a one-tap overlay button in enabled apps.
+Store up to five local prompts. They stay hidden until the compact **P** button below **Down** is tapped.
 
 - maximum label length: 16 characters
 - maximum phrase length: 5,000 characters
@@ -63,14 +63,11 @@ On Android 13 and later, ScrollDock can request that the tile be added. Earlier 
 
 ## Controls
 
-- **Top**: repeatedly moves toward the start until the edge is confirmed or the safety limit stops the command.
-- **Page Up**: moves approximately one configured viewport upward.
-- **Page Down**: moves approximately one configured viewport downward.
-- **Bottom**: repeatedly moves toward the end until the edge is confirmed or the safety limit stops the command.
-- Hold Page Up or Page Down for continuous scrolling. Release to stop.
-- Optional **Previous message** and **Next message** buttons navigate structural conversation blocks.
-- The handle menu includes previous/next user-message and assistant-response commands.
-- Drag the handle to reposition the bar. Long-press it for target selection, method selection, collapse, temporary hiding, settings, or disable actions.
+- **Move**: drag the small handle. Long-press it for target and visibility settings.
+- **Super Up**: tap once to keep scrolling toward the top. Tap again to stop.
+- **Down**: tap for one page. Hold for continuous downward scrolling; release to stop.
+- **P**: opens the compact prompt list below Down. Long-press to edit prompts.
+- The dashboard switch turns floating controls on or off directly in the app.
 
 ## Reliable navigation
 
@@ -87,8 +84,8 @@ Each app can use one of three methods:
 - No `INTERNET` permission.
 - No analytics, ads, accounts, screen capture, broad storage or content transmission.
 - Structural scrolling and diagnostics do not read screen text.
-- When the user taps a Quick phrase, ScrollDock temporarily reads only the focused editable field so it can insert the phrase without deleting existing text. The field content is not logged, persisted or transmitted.
-- Quick phrases, selected package identifiers and the latest structural diagnostic snapshot are stored locally in the same clearable settings store.
+- When the user taps a Quick prompt, ScrollDock temporarily reads only the focused editable field so it can insert the prompt without deleting existing text. The field content is not logged, persisted or transmitted.
+- Quick prompts, selected package identifiers and the latest structural diagnostic snapshot are stored locally in the same clearable settings store.
 - Android cloud backup is disabled.
 
 See [PRIVACY.md](PRIVACY.md) for the complete privacy statement.
@@ -128,16 +125,3 @@ gradle testDebugUnitTest assembleDebug
 ```
 
 The local debug APK is generated at `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions publishes a version-matched APK and certificate report.
-
-## Architecture
-
-- `FirstReleaseActivity`: feature dashboard and setup routing.
-- `AiAppsActivity`: recommended AI apps and separate installed-app picker.
-- `QuickPhrasesActivity`: five-slot local phrase editor.
-- `DiagnosticsActivity`: redacted compatibility report.
-- `ScrollDockTileService`: pause, resume, restore and setup tile states.
-- `QuickPhraseOverlayController`: one-tap focused-field insertion.
-- `ScrollAccessibilityService`: foreground scope, lifecycle, observations and overlay coordination.
-- `OverlayController`: navigation overlay, drag, target picker, message controls and feedback.
-- `ScrollableNodeResolver`: structural target scoring and locked-target recovery.
-- `ScrollCommandExecutor`: semantic actions, gesture fallback, cancellation and edge handling.
