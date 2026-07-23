@@ -12,6 +12,23 @@ data class QuickPhrase(
     val text: String,
 )
 
+data class PhraseInsertion(
+    val text: String,
+    val cursor: Int,
+)
+
+object QuickPhraseText {
+    fun insert(current: String, phrase: String, rawStart: Int, rawEnd: Int): PhraseInsertion {
+        val start = rawStart.takeIf { it in 0..current.length } ?: current.length
+        val end = rawEnd.takeIf { it in start..current.length } ?: start
+        val replacement = current.substring(0, start) + phrase + current.substring(end)
+        return PhraseInsertion(
+            text = replacement,
+            cursor = (start + phrase.length).coerceAtMost(replacement.length),
+        )
+    }
+}
+
 class FeaturePrefs(context: Context) {
     private val store = context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE)
 
