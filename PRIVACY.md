@@ -25,7 +25,9 @@ The application does not request the Android `INTERNET` permission and contains 
 
 ## Local settings
 
-The app stores selected package identifiers, overlay position, control size, opacity, page distance, timing, disclosure consent, pause state, collapse state, temporary hiding state and up to five Quick phrases. Compatibility diagnostics store only the last action name, result, failure category and timestamp. Android cloud backup is disabled. Local settings can be cleared from the app.
+The app stores selected package identifiers, overlay position, control size, opacity, page distance, timing, disclosure consent, pause state, collapse state, temporary hiding state and up to five Quick phrases. The latest compatibility diagnostic snapshot stores the selected package, structural class and view identifier, bounds, available action identifiers, chosen method, keyboard bounds, a hashed target signature, the last action result, failure code and timestamp. It does not store displayed screen text or input-field contents.
+
+All current settings and diagnostics use the same local settings store, Android cloud backup is disabled, and **Clear local settings** removes that store.
 
 ## Permissions not requested
 
