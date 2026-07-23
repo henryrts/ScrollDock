@@ -14,6 +14,7 @@ class ScrollCommandExecutor(
 ) {
     interface Listener {
         fun onActiveCommand(command: ScrollCommand?)
+        fun onMoved()
         fun onEdge(direction: ScrollDirection)
         fun onMessageEdge(direction: MessageDirection, role: MessageRole)
         fun onFailure()
@@ -84,7 +85,7 @@ class ScrollCommandExecutor(
             active = null
             listener.onActiveCommand(null)
             when (result) {
-                StepResult.MOVED -> Unit
+                StepResult.MOVED -> listener.onMoved()
                 StepResult.EDGE -> listener.onEdge(direction)
                 StepResult.FAILED -> listener.onFailure()
             }
@@ -95,10 +96,13 @@ class ScrollCommandExecutor(
         performStep(direction, token) { result ->
             if (!isCurrent(token)) return@performStep
             when (result) {
-                StepResult.MOVED -> handler.postDelayed(
-                    { runContinuous(direction, token) },
-                    service.currentProfile().intervalMs,
-                )
+                StepResult.MOVED -> {
+                    listener.onMoved()
+                    handler.postDelayed(
+                        { runContinuous(direction, token) },
+                        service.currentProfile().intervalMs,
+                    )
+                }
                 StepResult.EDGE -> finishAtEdge(direction, token)
                 StepResult.FAILED -> finishFailure(token)
             }
@@ -114,10 +118,13 @@ class ScrollCommandExecutor(
         performStep(direction, token) { result ->
             if (!isCurrent(token)) return@performStep
             when (result) {
-                StepResult.MOVED -> handler.postDelayed(
-                    { runToEdge(direction, token, attempts + 1, startedAt) },
-                    service.currentProfile().intervalMs,
-                )
+                StepResult.MOVED -> {
+                    listener.onMoved()
+                    handler.postDelayed(
+                        { runToEdge(direction, token, attempts + 1, startedAt) },
+                        service.currentProfile().intervalMs,
+                    )
+                }
                 StepResult.EDGE -> finishAtEdge(direction, token)
                 StepResult.FAILED -> finishFailure(token)
             }

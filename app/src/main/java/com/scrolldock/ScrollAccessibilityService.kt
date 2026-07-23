@@ -41,13 +41,13 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
             prefs = prefs,
             commandSink = { command ->
                 if (command in SCROLL_COMMANDS) {
-                    captureDiagnostics()
+                    captureDiagnostics(command.scrollDirectionOrNull())
                     DiagnosticBridge.markRunning(this, command)
                 }
                 executor.execute(command)
             },
             continuousStart = { direction ->
-                captureDiagnostics()
+                captureDiagnostics(direction)
                 DiagnosticBridge.markRunning(
                     this,
                     if (direction == ScrollDirection.UP) ScrollCommand.PAGE_UP else ScrollCommand.PAGE_DOWN,
@@ -63,6 +63,10 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
             messageNavigator = messageNavigator,
             listener = object : ScrollCommandExecutor.Listener {
                 override fun onActiveCommand(command: ScrollCommand?) = overlay.updateActive(command)
+
+                override fun onMoved() {
+                    DiagnosticBridge.markSuccess(this@ScrollAccessibilityService)
+                }
 
                 override fun onEdge(direction: ScrollDirection) {
                     DiagnosticBridge.markEdge(this@ScrollAccessibilityService, direction)
@@ -92,7 +96,6 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         if (event == null) return
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
             recordScrollObservation(event)
-            DiagnosticBridge.markSuccess(this)
         }
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
             event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
@@ -133,6 +136,7 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
                 if (::quickPhraseOverlay.isInitialized) quickPhraseOverlay.hide()
                 updateVisibility()
             }
+            key?.startsWith(DiagnosticBridge.KEY_PREFIX) == true -> Unit
             key?.startsWith("profile.") == true -> {
                 resolver.invalidate()
                 if (::overlay.isInitialized) overlay.rebuild()
@@ -277,18 +281,22 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
             ?: rootInActiveWindow?.packageName?.toString()
     }
 
-    private fun captureDiagnostics() {
+    private fun captureDiagnostics(direction: ScrollDirection? = null) {
         val appPackage = currentForegroundPackage()
         if (appPackage.isNullOrBlank() || appPackage == packageName || !prefs.selectedPackages().contains(appPackage)) return
-        DiagnosticBridge.capture(this, buildDiagnosticTargetReport())
+        DiagnosticBridge.capture(this, buildDiagnosticTargetReport(direction))
     }
 
-    private fun buildDiagnosticTargetReport(): String {
+    private fun buildDiagnosticTargetReport(direction: ScrollDirection?): String {
         val appPackage = currentForegroundPackage()
         val profile = currentProfile()
         val root = rootInActiveWindow
         val node = root?.let {
-            resolver.resolve(it, ScrollDirection.DOWN) ?: resolver.resolve(it, ScrollDirection.UP)
+            if (direction != null) {
+                resolver.resolve(it, direction)
+            } else {
+                resolver.resolve(it, ScrollDirection.DOWN) ?: resolver.resolve(it, ScrollDirection.UP)
+            }
         }
         val fingerprint = node?.let(resolver::fingerprint)
         val bounds = fingerprint?.bounds
@@ -303,6 +311,7 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         return buildString {
             appendLine("ScrollDock compatibility diagnostics")
             appendLine("Package: ${appPackage ?: "None"}")
+            appendLine("Requested direction: ${direction?.name ?: "Snapshot"}")
             appendLine("Selected node: ${node?.className ?: "None"}")
             appendLine("View ID: ${node?.viewIdResourceName ?: "None"}")
             appendLine("Node bounds: ${bounds?.let(::formatBounds) ?: "None"}")

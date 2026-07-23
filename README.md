@@ -4,9 +4,9 @@ ScrollDock is an offline Android accessibility app that adds movable navigation 
 
 ## Version
 
-Current app version: **0.3.0**
+Current app version: **0.3.1**
 
-GitHub Actions reads `versionName` from `app/build.gradle.kts` and publishes the matching file name, such as `ScrollDock-v0.3.0.apk`.
+GitHub Actions reads `versionName` from `app/build.gradle.kts` and publishes the matching file name, such as `ScrollDock-v0.3.1.apk`.
 
 ## First release feature set
 
@@ -15,15 +15,16 @@ GitHub Actions reads `versionName` from `app/build.gradle.kts` and publishes the
 The diagnostics screen shows structural metadata for the current scroll target:
 
 - foreground package
+- requested scroll direction
 - selected node class and view ID
 - node bounds
 - available scroll actions
 - configured scroll method
 - keyboard bounds
 - hashed target signature
-- last action result and failure reason
+- last action result, failure code and failure reason
 
-The report excludes screen text, input contents and clipboard contents.
+A scroll is marked successful only after the existing command engine confirms movement for the selected target. The report excludes screen text, input contents and clipboard contents.
 
 ### AI Apps
 
@@ -44,6 +45,7 @@ Store up to five local prompts. Every configured phrase appears as a one-tap ove
 - maximum label length: 16 characters
 - maximum phrase length: 5,000 characters
 - inserted at the focused field's cursor or selection
+- existing text outside the selection is preserved
 - never presses Send
 - blocked in password fields
 - no cloud sync or clipboard history
@@ -86,7 +88,7 @@ Each app can use one of three methods:
 - No analytics, ads, accounts, screen capture, broad storage or content transmission.
 - Structural scrolling and diagnostics do not read screen text.
 - When the user taps a Quick phrase, ScrollDock temporarily reads only the focused editable field so it can insert the phrase without deleting existing text. The field content is not logged, persisted or transmitted.
-- Quick phrases and selected package identifiers are stored locally.
+- Quick phrases, selected package identifiers and the latest structural diagnostic snapshot are stored locally in the same clearable settings store.
 - Android cloud backup is disabled.
 
 See [PRIVACY.md](PRIVACY.md) for the complete privacy statement.
