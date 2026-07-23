@@ -31,6 +31,7 @@ class FirstReleaseActivity : BaseSettingsActivity() {
     private lateinit var prefs: Prefs
     private lateinit var features: FeaturePrefs
     private lateinit var status: TextView
+    private lateinit var controlsSwitch: Switch
     private lateinit var aiStatus: TextView
     private lateinit var phraseStatus: TextView
     private var openedSetup = false
@@ -53,11 +54,21 @@ class FirstReleaseActivity : BaseSettingsActivity() {
     private fun buildContent(): View {
         val root = pageRoot()
         root.addView(title("ScrollDock"))
-        root.addView(body("Version ${appVersion()} · Navigation, quick phrases, diagnostics and app controls."))
+        root.addView(body("Version ${appVersion()} · Minimal scrolling, prompts and app controls."))
 
         root.addView(section("Service"))
         status = cardText("")
         root.addView(status)
+        controlsSwitch = Switch(this).apply {
+            text = "Show floating controls"
+            setPadding(0, dp(10), 0, dp(10))
+            setOnClickListener {
+                features.paused = false
+                prefs.overlayEnabled = isChecked
+                refreshStatus()
+            }
+        }
+        root.addView(controlsSwitch)
         root.addView(actionButton("Set up or manage accessibility") {
             openedSetup = true
             startActivity(Intent(this, SetupActivity::class.java))
@@ -73,13 +84,13 @@ class FirstReleaseActivity : BaseSettingsActivity() {
             startActivity(Intent(this, AiAppsActivity::class.java))
         })
 
-        root.addView(section("Quick phrases"))
+        root.addView(section("Quick prompts"))
         phraseStatus = body("")
         root.addView(phraseStatus)
-        root.addView(actionButton("Edit five Quick phrases") {
+        root.addView(actionButton("Edit five Quick prompts") {
             startActivity(Intent(this, QuickPhrasesActivity::class.java))
         })
-        root.addView(body("Configured phrases appear as one-tap buttons in enabled apps. ScrollDock inserts them without pressing Send."))
+        root.addView(body("Tap the small P button below Down to open prompts. Long-press P to edit them."))
 
         root.addView(section("Compatibility diagnostics"))
         root.addView(body("Inspect the current structural scroll target, supported actions, method, keyboard bounds, target signature and last failure without collecting screen text."))
@@ -95,7 +106,7 @@ class FirstReleaseActivity : BaseSettingsActivity() {
         root.addView(
             body(
                 "No Internet permission, analytics, ads, accounts or screen capture. " +
-                    "Quick phrases are stored locally. When you tap a phrase, ScrollDock temporarily reads only the focused editable field so it can insert text without deleting what is already there."
+                    "Quick prompts are stored locally. When you tap a prompt, ScrollDock temporarily reads only the focused editable field so it can insert text without deleting what is already there."
             )
         )
 
@@ -109,7 +120,7 @@ class FirstReleaseActivity : BaseSettingsActivity() {
         status.text = when {
             !enabled -> "Accessibility service: Setup required"
             paused -> "Accessibility service: Paused"
-            !prefs.overlayEnabled -> "Accessibility service: Active · controls hidden"
+            !prefs.overlayEnabled -> "Accessibility service: Active · controls off"
             else -> "Accessibility service: Active"
         }
         status.setTextColor(
@@ -119,8 +130,12 @@ class FirstReleaseActivity : BaseSettingsActivity() {
                 else -> 0xFF2E7D32.toInt()
             }
         )
+        if (::controlsSwitch.isInitialized) {
+            controlsSwitch.isEnabled = enabled
+            controlsSwitch.isChecked = enabled && prefs.overlayEnabled && !paused
+        }
         aiStatus.text = "Enabled apps: ${prefs.selectedPackages().size}\nRecommended: ChatGPT, Claude, Gemini, DeepSeek and Kimi"
-        phraseStatus.text = "Configured phrases: ${features.configuredPhraseCount()} / ${FeaturePrefs.MAX_PHRASES}"
+        phraseStatus.text = "Configured prompts: ${features.configuredPhraseCount()} / ${FeaturePrefs.MAX_PHRASES}"
     }
 
     private fun launchSetupWhenRequired() {
@@ -275,11 +290,11 @@ class QuickPhrasesActivity : BaseSettingsActivity() {
 
     private fun buildContent(): View {
         val root = pageRoot()
-        root.addView(title("Quick phrases"))
-        root.addView(body("Store up to five local prompts. Each configured phrase appears as a one-tap button in enabled apps. ScrollDock never presses Send."))
+        root.addView(title("Quick prompts"))
+        root.addView(body("Store up to five local prompts. Tap P below Down to open them. ScrollDock never presses Send."))
 
         features.quickPhrases().forEachIndexed { index, phrase ->
-            root.addView(section("Phrase ${index + 1}"))
+            root.addView(section("Prompt ${index + 1}"))
             val label = EditText(this).apply {
                 hint = "Short label"
                 setSingleLine(true)
@@ -299,7 +314,7 @@ class QuickPhrasesActivity : BaseSettingsActivity() {
             root.addView(text, ViewGroup.LayoutParams.MATCH_PARENT, dp(120))
         }
 
-        root.addView(actionButton("Save Quick phrases") {
+        root.addView(actionButton("Save Quick prompts") {
             for (index in 0 until FeaturePrefs.MAX_PHRASES) {
                 features.saveQuickPhrase(
                     index,
@@ -307,7 +322,7 @@ class QuickPhrasesActivity : BaseSettingsActivity() {
                     textFields[index].text.toString(),
                 )
             }
-            Toast.makeText(this, "Quick phrases saved", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Quick prompts saved", Toast.LENGTH_SHORT).show()
             finish()
         })
         root.addView(body("Do not store passwords, authentication codes or highly sensitive personal information."))
