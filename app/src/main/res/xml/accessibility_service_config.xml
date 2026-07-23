@@ -8,4 +8,4 @@
     android:description="@string/accessibility_service_description"
     android:isAccessibilityTool="false"
     android:notificationTimeout="80"
-    android:settingsActivity="com.scrolldock.MainActivity" />
+    android:settingsActivity="com.scrolldock.FirstReleaseActivity" />
