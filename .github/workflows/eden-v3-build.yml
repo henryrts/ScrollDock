@@ -1,0 +1,393 @@
+name: Temporary Eden Hades v3 APK
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android toolchain
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;28.2.13676358" \
+            "cmake;3.31.6"
+
+      - name: Clone exact Eden source
+        shell: bash
+        run: |
+          git clone --recursive https://github.com/eden-emulator/mirror.git eden
+          cd eden
+          git checkout 39763e7321fa17486f1b466a1777f8aa4a91949f
+          git submodule update --init --recursive
+          test "$(git hash-object src/video_core/engines/maxwell_3d.cpp)" = "e7da9d9138751070d24862733f5b4412a5c2a6da"
+          test "$(git hash-object src/video_core/gpu_thread.cpp)" = "50570b596d15da4905de9a9cfdbfc478f1ad6864"
+          test "$(git hash-object src/core/game_settings.cpp)" = "745eae19085b8e06f17b7f04640dc66fe527c885"
+          test "$(git hash-object src/core/game_settings.h)" = "327a1a4e2c6670e27cd886970ec5719047472199"
+          test "$(git hash-object src/video_core/video_core.cpp)" = "54fb8f6239f3804627ff526549ebff82d704034c"
+          test "$(git hash-object src/android/app/build.gradle.kts)" = "a4076978a1f608a7acdce8c9a0083e97eb8ab7fb"
+
+      - name: Apply Hades profile, Eden Bo identity, and v3 tracing
+        shell: bash
+        run: |
+          cd eden
+          python3 - <<'PY'
+          from pathlib import Path
+
+          HADES_ID = "0x0100A00019DE0000ULL"
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f"Expected exactly one {label}, found {count}")
+              return text.replace(old, new, 1)
+
+          # Hades II startup synchronization profile from private PR #7.
+          game_cpp_path = Path("src/core/game_settings.cpp")
+          game_cpp = game_cpp_path.read_text(encoding="utf-8")
+          profile = r'''namespace {
+
+          template <typename Setting, typename Value>
+          void ApplyPerGameOverride(Setting& setting, const Value& value) {
+              setting.SetGlobal(false);
+              setting.SetValue(value);
+          }
+
+          void ApplyHadesIISynchronizationProfile() {
+              ApplyPerGameOverride(Settings::values.gpu_accuracy, Settings::GpuAccuracy::High);
+              ApplyPerGameOverride(Settings::values.dma_accuracy, Settings::DmaAccuracy::Safe);
+              ApplyPerGameOverride(Settings::values.gpu_fence_behavior, Settings::GpuFenceBehavior::Strict);
+              ApplyPerGameOverride(Settings::values.fast_gpu_time, Settings::GpuOverclock::Normal);
+              ApplyPerGameOverride(Settings::values.sync_memory_operations, true);
+              ApplyPerGameOverride(Settings::values.use_reactive_flushing, true);
+              ApplyPerGameOverride(Settings::values.enable_gpu_buffer_readback, true);
+              ApplyPerGameOverride(Settings::values.barrier_feedback_loops, true);
+              ApplyPerGameOverride(Settings::values.use_asynchronous_gpu_emulation, false);
+              ApplyPerGameOverride(Settings::values.use_asynchronous_shaders, false);
+              ApplyPerGameOverride(Settings::values.async_presentation, false);
+              ApplyPerGameOverride(Settings::values.skip_cpu_inner_invalidation, false);
+              ApplyPerGameOverride(Settings::values.disable_buffer_reorder, true);
+              ApplyPerGameOverride(Settings::values.vertex_input_dynamic_state, true);
+          #ifdef __ANDROID__
+              ApplyPerGameOverride(Settings::values.use_optimized_vertex_buffers, false);
+          #endif
+              Settings::UpdateGPUAccuracy();
+              LOG_WARNING(Core,
+                          "Enabled Hades II startup synchronization profile: strict fences, safe DMA, "
+                          "synchronous memory/GPU/shaders, reactive flushing, GPU readback, and conservative "
+                          "buffer ordering");
+          }
+
+          } // namespace
+
+          '''.replace("          ", "")
+          game_cpp = replace_once(
+              game_cpp,
+              "namespace Core::GameSettings {\n\n",
+              "namespace Core::GameSettings {\n\n" + profile,
+              "game profile insertion",
+          )
+          old_load = '''void LoadOverrides(std::uint64_t program_id, const VideoCore::RendererBase& renderer) {
+              const auto env = DetectEnvironment(renderer);
+
+              switch (static_cast<TitleID>(program_id)) {
+                  case TitleID::NinjaGaidenRagebound:
+                      Settings::values.use_squashed_iterated_blend = true;
+                      break;
+                  default:
+                      break;
+              }
+          '''.replace("              ", "")
+          new_load = '''void LoadStartupOverrides(std::uint64_t program_id) {
+              switch (static_cast<TitleID>(program_id)) {
+                  case TitleID::NinjaGaidenRagebound:
+                      Settings::values.use_squashed_iterated_blend = true;
+                      break;
+                  case TitleID::HadesII:
+                      ApplyHadesIISynchronizationProfile();
+                      break;
+                  default:
+                      break;
+              }
+          }
+
+          void LoadOverrides(std::uint64_t program_id, const VideoCore::RendererBase& renderer) {
+              const auto env = DetectEnvironment(renderer);
+          '''.replace("              ", "")
+          game_cpp = replace_once(game_cpp, old_load, new_load, "startup override split")
+          game_cpp_path.write_text(game_cpp, encoding="utf-8")
+
+          game_h_path = Path("src/core/game_settings.h")
+          game_h = game_h_path.read_text(encoding="utf-8")
+          game_h = replace_once(
+              game_h,
+              "    NinjaGaidenRagebound = 0x0100781020710000ULL\n",
+              "    NinjaGaidenRagebound = 0x0100781020710000ULL,\n"
+              "    HadesII = 0x0100A00019DE0000ULL,\n",
+              "Hades title ID",
+          )
+          game_h = replace_once(
+              game_h,
+              "EnvironmentInfo DetectEnvironment(const VideoCore::RendererBase& renderer);\n\n"
+              "void LoadOverrides(std::uint64_t program_id, const VideoCore::RendererBase& renderer);",
+              "EnvironmentInfo DetectEnvironment(const VideoCore::RendererBase& renderer);\n\n"
+              "void LoadStartupOverrides(std::uint64_t program_id);\n\n"
+              "void LoadOverrides(std::uint64_t program_id, const VideoCore::RendererBase& renderer);",
+              "startup override declaration",
+          )
+          game_h_path.write_text(game_h, encoding="utf-8")
+
+          video_path = Path("src/video_core/video_core.cpp")
+          video = video_path.read_text(encoding="utf-8")
+          video = replace_once(video, '#include "core/core.h"', '#include "core/core.h"\n#include "core/cpu_manager.h"', "CPU manager include")
+          video = replace_once(video, '#include "core/frontend/graphics_context.h"', '#include "core/frontend/graphics_context.h"\n#include "core/game_settings.h"', "game settings include")
+          old_gpu = '''void CreateGPU(std::optional<Tegra::GPU>& gpu, Core::Frontend::EmuWindow& emu_window, Core::System& system) {
+              Settings::UpdateRescalingInfo();
+
+              const auto nvdec_value = Settings::values.nvdec_emulation.GetValue();
+              const bool use_nvdec = nvdec_value != Settings::NvdecEmulation::Off;
+              const bool use_async = Settings::values.use_asynchronous_gpu_emulation.GetValue();
+              gpu.emplace(system, use_async, use_nvdec);
+          '''.replace("              ", "")
+          new_gpu = '''void CreateGPU(std::optional<Tegra::GPU>& gpu, Core::Frontend::EmuWindow& emu_window, Core::System& system) {
+              Core::GameSettings::LoadStartupOverrides(Settings::GetCurrentProgramID());
+
+              const bool use_async = Settings::values.use_asynchronous_gpu_emulation.GetValue();
+              system.GetCpuManager().SetAsyncGpu(use_async);
+
+              Settings::UpdateRescalingInfo();
+
+              const auto nvdec_value = Settings::values.nvdec_emulation.GetValue();
+              const bool use_nvdec = nvdec_value != Settings::NvdecEmulation::Off;
+              gpu.emplace(system, use_async, use_nvdec);
+          '''.replace("              ", "")
+          video = replace_once(video, old_gpu, new_gpu, "GPU startup override wiring")
+          video_path.write_text(video, encoding="utf-8")
+
+          # Eden Bo install identity and branding.
+          gradle_path = Path("src/android/app/build.gradle.kts")
+          gradle = gradle_path.read_text(encoding="utf-8")
+          gradle = replace_once(gradle, 'applicationId = "dev.eden.eden_emulator"', 'applicationId = "eden.bo.elite8"', "application ID")
+          gradle = replace_once(gradle, 'manifestPlaceholders += mapOf("appNameBase" to "Eden")', 'manifestPlaceholders += mapOf("appNameBase" to "Eden Bo")', "mainline app name")
+          gradle = replace_once(gradle, 'resValue("string", "app_name_suffixed", "Eden")', 'resValue("string", "app_name_suffixed", "Eden Bo")', "mainline suffixed name")
+          gradle = replace_once(gradle, 'resValue("string", "app_name", "Eden$suffix")', 'resValue("string", "app_name", "Eden Bo$suffix")', "generated app name")
+          gradle_path.write_text(gradle, encoding="utf-8")
+
+          manifest_path = Path("src/android/app/src/main/AndroidManifest.xml")
+          manifest = manifest_path.read_text(encoding="utf-8")
+          manifest = replace_once(
+              manifest,
+              'dev.eden.eden_emulator.LAUNCH_WITH_CUSTOM_CONFIG',
+              '${applicationId}.LAUNCH_WITH_CUSTOM_CONFIG',
+              "custom config action",
+          )
+          manifest_path.write_text(manifest, encoding="utf-8")
+
+          strings_path = Path("src/android/app/src/main/res/values/strings.xml")
+          strings = strings_path.read_text(encoding="utf-8")
+          strings = replace_once(
+              strings,
+              '<string name="app_name" translatable="false">Eden</string>',
+              '<string name="app_name" translatable="false">Eden Bo</string>',
+              "base app name",
+          )
+          strings_path.write_text(strings, encoding="utf-8")
+
+          override_path = Path("src/android/app/src/mainline/res/values/eden_bo.xml")
+          override_path.parent.mkdir(parents=True, exist_ok=True)
+          override_path.write_text('''<?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_notification_channel_name">Eden Bo</string>
+              <string name="app_notification_channel_id" translatable="false">Eden Bo</string>
+              <string name="app_notification_channel_description">Eden Bo Switch emulator notifications</string>
+              <string name="app_notification_running_text">Eden Bo is Running</string>
+          </resources>
+          '''.replace("          ", ""), encoding="utf-8")
+
+          # v3 Maxwell macro mismatch marker.
+          macro_path = Path("src/video_core/engines/maxwell_3d.cpp")
+          macro = macro_path.read_text(encoding="utf-8")
+          macro = replace_once(
+              macro,
+              """    if (executing_macro != 0) {
+                  ASSERT(method == executing_macro + 1);
+              }""",
+              """    if (executing_macro != 0) {
+                  if (method != executing_macro + 1 &&
+                      Settings::GetCurrentProgramID() == 0x0100A00019DE0000ULL) {
+                      LOG_CRITICAL(HW_GPU,
+                                   "[HadesIIMacro] mismatch method={:#x} expected={:#x} "
+                                   "executing_macro={:#x} argument={:#x} is_last_call={} "
+                                   "params={} segments={} dirty={}",
+                                   method, executing_macro + 1, executing_macro, method_argument,
+                                   is_last_call, macro_params.size(), macro_segments.size(),
+                                   current_macro_dirty);
+                  }
+                  ASSERT(method == executing_macro + 1);
+              }""",
+              "Maxwell macro assertion",
+          )
+          macro_path.write_text(macro, encoding="utf-8")
+
+          # v3 GPU command-thread watchdog.
+          gpu_path = Path("src/video_core/gpu_thread.cpp")
+          gpu = gpu_path.read_text(encoding="utf-8")
+          gpu = replace_once(
+              gpu,
+              '#include "common/assert.h"',
+              '''#include <atomic>
+          #include <chrono>
+          #include <mutex>
+          #include <thread>
+
+          #include "common/assert.h"
+          #include "common/logging.h"'''.replace("          ", ""),
+              "GPU include insertion",
+          )
+          namespace_marker = "namespace VideoCommon::GPUThread {"
+          watchdog = r'''namespace VideoCommon::GPUThread {
+          namespace {
+
+          constexpr u64 HADES_II_TITLE_ID = 0x0100A00019DE0000ULL;
+          std::atomic<const char*> hades_gpu_stage{nullptr};
+          std::atomic<u64> hades_gpu_stage_started_ns{};
+          std::atomic<u64> hades_gpu_last_report_ns{};
+          std::atomic<const char*> hades_submit_stage{nullptr};
+          std::atomic<u64> hades_submit_stage_started_ns{};
+          std::atomic<u64> hades_submit_last_report_ns{};
+
+          u64 HadesTraceNowNs() {
+              return static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch())
+                                          .count());
+          }
+
+          void SetHadesStage(std::atomic<const char*>& stage, std::atomic<u64>& started,
+                             std::atomic<u64>& last_report, const char* value) {
+              if (Settings::GetCurrentProgramID() != HADES_II_TITLE_ID) return;
+              started.store(HadesTraceNowNs(), std::memory_order_relaxed);
+              last_report.store(0, std::memory_order_relaxed);
+              stage.store(value, std::memory_order_release);
+          }
+
+          void ClearHadesStage(std::atomic<const char*>& stage) {
+              if (Settings::GetCurrentProgramID() == HADES_II_TITLE_ID) {
+                  stage.store(nullptr, std::memory_order_release);
+              }
+          }
+
+          void ReportHadesStage(const char* channel, std::atomic<const char*>& stage,
+                                std::atomic<u64>& started, std::atomic<u64>& last_report) {
+              const char* current = stage.load(std::memory_order_acquire);
+              if (current == nullptr) return;
+              const u64 now = HadesTraceNowNs();
+              const u64 begin = started.load(std::memory_order_relaxed);
+              const u64 elapsed = now > begin ? now - begin : 0;
+              if (elapsed < 2'000'000'000ULL) return;
+              u64 previous = last_report.load(std::memory_order_relaxed);
+              if (previous != 0 && now - previous < 2'000'000'000ULL) return;
+              if (!last_report.compare_exchange_strong(previous, now, std::memory_order_relaxed)) return;
+              LOG_ERROR(HW_GPU, "[HadesIICommandStall] {} blocked for {} ms in {}", channel,
+                        elapsed / 1'000'000ULL, current);
+          }
+
+          void StartHadesCommandWatchdog() {
+              static std::once_flag once;
+              std::call_once(once, [] {
+                  std::thread([] {
+                      Common::SetCurrentThreadName("HadesIICmdTrace");
+                      using namespace std::chrono_literals;
+                      for (;;) {
+                          std::this_thread::sleep_for(250ms);
+                          if (Settings::GetCurrentProgramID() != HADES_II_TITLE_ID) continue;
+                          ReportHadesStage("gpu-thread", hades_gpu_stage,
+                                           hades_gpu_stage_started_ns, hades_gpu_last_report_ns);
+                          ReportHadesStage("submitter", hades_submit_stage,
+                                           hades_submit_stage_started_ns,
+                                           hades_submit_last_report_ns);
+                      }
+                  }).detach();
+              });
+          }
+
+          } // Anonymous namespace'''.replace("          ", "")
+          gpu = replace_once(gpu, namespace_marker, watchdog, "GPU watchdog namespace")
+          start_signature = (
+              "void ThreadManager::StartThread(VideoCore::RendererBase& renderer, "
+              "Core::Frontend::GraphicsContext& context, Tegra::Control::Scheduler& scheduler) {"
+          )
+          gpu = replace_once(gpu, start_signature, start_signature + "\n    StartHadesCommandWatchdog();", "watchdog startup")
+          gpu = replace_once(
+              gpu,
+              "scheduler.Push(system.GPU(), submit_list->channel, std::move(submit_list->entries));",
+              """SetHadesStage(hades_gpu_stage, hades_gpu_stage_started_ns,
+                               hades_gpu_last_report_ns, "Control::Scheduler::Push");
+                  scheduler.Push(system.GPU(), submit_list->channel, std::move(submit_list->entries));
+                  ClearHadesStage(hades_gpu_stage);""",
+              "scheduler push stage",
+          )
+          old_wait = """        state.cv.wait(lk, thread.get_stop_token(), [this, fence] {
+                      return fence <= state.signaled_fence.load(std::memory_order_relaxed);
+                  });"""
+          new_wait = """        SetHadesStage(hades_submit_stage, hades_submit_stage_started_ns,
+                                 hades_submit_last_report_ns, "GPUThread::PushCommand(wait)");
+                  state.cv.wait(lk, thread.get_stop_token(), [this, fence] {
+                      return fence <= state.signaled_fence.load(std::memory_order_relaxed);
+                  });
+                  ClearHadesStage(hades_submit_stage);"""
+          gpu = replace_once(gpu, old_wait, new_wait, "synchronous submit wait")
+          gpu_path.write_text(gpu, encoding="utf-8")
+
+          print("Applied Hades profile, Eden Bo identity, and v3 command tracing")
+          PY
+
+      - name: Build APK
+        shell: bash
+        env:
+          GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx6g
+        run: |
+          cd eden/src/android
+          chmod +x gradlew
+          ./gradlew assembleMainlineRelease \
+            --no-daemon \
+            -Dorg.gradle.workers.max=8 \
+            -Pnightly=false
+
+      - name: Package APK
+        shell: bash
+        run: |
+          mkdir -p output
+          cp eden/src/android/app/build/outputs/apk/mainline/release/app-mainline-release.apk \
+            output/Eden-Bo-PR17-v3-HadesCommandTrace.apk
+          sha256sum output/Eden-Bo-PR17-v3-HadesCommandTrace.apk | tee output/Eden-Bo-PR17-v3-HadesCommandTrace.apk.sha256
+          ls -lh output
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Eden-Bo-PR17-v3-HadesCommandTrace
+          path: output/*
+          if-no-files-found: error
+          retention-days: 7
