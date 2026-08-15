@@ -7,28 +7,6 @@ data class RecommendedApp(
     val packageName: String,
 )
 
-data class QuickPhrase(
-    val label: String,
-    val text: String,
-)
-
-data class PhraseInsertion(
-    val text: String,
-    val cursor: Int,
-)
-
-object QuickPhraseText {
-    fun insert(current: String, phrase: String, rawStart: Int, rawEnd: Int): PhraseInsertion {
-        val start = rawStart.takeIf { it in 0..current.length } ?: current.length
-        val end = rawEnd.takeIf { it in start..current.length } ?: start
-        val replacement = current.substring(0, start) + phrase + current.substring(end)
-        return PhraseInsertion(
-            text = replacement,
-            cursor = (start + phrase.length).coerceAtMost(replacement.length),
-        )
-    }
-}
-
 class FeaturePrefs(context: Context) {
     private val store = context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE)
 
@@ -42,32 +20,9 @@ class FeaturePrefs(context: Context) {
         store.edit().putBoolean(KEY_RECOMMENDED_APPS_SEEDED, true).apply()
     }
 
-    fun quickPhrases(): List<QuickPhrase> = (0 until MAX_PHRASES).map { index ->
-        val text = store.getString(phraseTextKey(index), "").orEmpty().take(MAX_PHRASE_LENGTH)
-        val savedLabel = store.getString(phraseLabelKey(index), "").orEmpty().trim().take(MAX_LABEL_LENGTH)
-        QuickPhrase(
-            label = savedLabel.ifBlank { "Phrase ${index + 1}" },
-            text = text,
-        )
-    }
-
-    fun saveQuickPhrase(index: Int, label: String, text: String) {
-        require(index in 0 until MAX_PHRASES)
-        store.edit()
-            .putString(phraseLabelKey(index), label.trim().take(MAX_LABEL_LENGTH))
-            .putString(phraseTextKey(index), text.take(MAX_PHRASE_LENGTH))
-            .apply()
-    }
-
-    fun configuredPhraseCount(): Int = quickPhrases().count { it.text.isNotBlank() }
-
     companion object {
         const val STORE_NAME = "scroll_dock"
         const val KEY_PAUSED = "paused"
-        const val QUICK_PHRASE_PREFIX = "quick_phrase."
-        const val MAX_PHRASES = 5
-        const val MAX_LABEL_LENGTH = 16
-        const val MAX_PHRASE_LENGTH = 5_000
 
         private const val KEY_RECOMMENDED_APPS_SEEDED = "recommended_apps_seeded_v1"
 
@@ -78,8 +33,5 @@ class FeaturePrefs(context: Context) {
             RecommendedApp("DeepSeek", "com.deepseek.chat"),
             RecommendedApp("Kimi", "com.moonshot.kimichat"),
         )
-
-        private fun phraseLabelKey(index: Int): String = "$QUICK_PHRASE_PREFIX$index.label"
-        private fun phraseTextKey(index: Int): String = "$QUICK_PHRASE_PREFIX$index.text"
     }
 }
