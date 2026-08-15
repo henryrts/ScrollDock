@@ -3,26 +3,13 @@ package com.scrolldock
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
-import android.graphics.PixelFormat
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.os.Build
-import android.os.Bundle
 import android.provider.Settings
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
-import android.text.TextUtils
-import android.view.Gravity
-import android.view.View
-import android.view.WindowManager
 import android.view.accessibility.AccessibilityNodeInfo
-import android.widget.LinearLayout
-import android.widget.TextView
-import android.widget.Toast
 import java.security.MessageDigest
 import java.text.DateFormat
-import java.util.ArrayDeque
 import java.util.Date
 
 object DiagnosticBridge {
@@ -167,133 +154,6 @@ object DiagnosticBridge {
     private const val KEY_FAILURE = "${KEY_PREFIX}last_failure"
     private const val KEY_ACTION = "${KEY_PREFIX}last_action"
     private const val KEY_UPDATED = "${KEY_PREFIX}updated"
-}
-
-class QuickPhraseOverlayController(private val service: ScrollAccessibilityService) {
-    private val windowManager = service.getSystemService(WindowManager::class.java)
-    private var root: LinearLayout? = null
-
-    fun show() {
-        if (root != null) return
-        val phrases = FeaturePrefs(service).quickPhrases().filter { it.text.isNotBlank() }
-        if (phrases.isEmpty()) return
-
-        val container = LinearLayout(service).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            background = roundedBackground(0xE61D2433.toInt(), 14)
-            setPadding(service.dp(4), service.dp(4), service.dp(4), service.dp(4))
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
-        }
-
-        phrases.forEach { phrase ->
-            container.addView(phraseButton(phrase))
-        }
-
-        val screen = service.availableAppBounds()
-        val layoutParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-            PixelFormat.TRANSLUCENT,
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = service.dp(8)
-            y = (screen.centerY() - service.dp(120)).coerceAtLeast(screen.top + service.dp(8))
-        }
-
-        windowManager.addView(container, layoutParams)
-        root = container
-    }
-
-    fun hide() {
-        root?.let { runCatching { windowManager.removeView(it) } }
-        root = null
-    }
-
-    private fun phraseButton(phrase: QuickPhrase): TextView = TextView(service).apply {
-        text = phrase.label
-        contentDescription = "Paste ${phrase.label}"
-        textSize = 14f
-        setTypeface(typeface, Typeface.BOLD)
-        setTextColor(Color.WHITE)
-        gravity = Gravity.CENTER
-        maxLines = 1
-        ellipsize = TextUtils.TruncateAt.END
-        background = roundedBackground(0x55FFFFFF, 10)
-        setPadding(service.dp(10), 0, service.dp(10), 0)
-        layoutParams = LinearLayout.LayoutParams(service.dp(132), service.dp(42)).apply {
-            topMargin = service.dp(2)
-            bottomMargin = service.dp(2)
-        }
-        setOnClickListener { pastePhrase(phrase.text) }
-        setOnLongClickListener {
-            service.startActivity(
-                Intent(service, QuickPhrasesActivity::class.java)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-            true
-        }
-    }
-
-    private fun pastePhrase(phrase: String) {
-        val node = findFocusedEditableNode()
-        if (node == null) {
-            Toast.makeText(service, "Select a text field first", Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (node.isPassword) {
-            Toast.makeText(service, "Quick phrases are disabled in password fields", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val insertion = QuickPhraseText.insert(
-            current = node.text?.toString().orEmpty(),
-            phrase = phrase,
-            rawStart = node.textSelectionStart,
-            rawEnd = node.textSelectionEnd,
-        )
-        val setText = Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, insertion.text)
-        }
-        val inserted = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, setText)
-        if (inserted) {
-            val selection = Bundle().apply {
-                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, insertion.cursor)
-                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, insertion.cursor)
-            }
-            node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selection)
-            Toast.makeText(service, "Phrase inserted", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(service, "This app blocked text insertion", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun findFocusedEditableNode(): AccessibilityNodeInfo? {
-        val rootNode = service.rootInActiveWindow ?: return null
-        rootNode.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.let { focused ->
-            if (focused.isEditable && focused.isVisibleToUser) return focused
-        }
-
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(rootNode)
-        while (queue.isNotEmpty()) {
-            val node = queue.removeFirst()
-            if (node.isEditable && node.isFocused && node.isVisibleToUser) return node
-            for (index in 0 until node.childCount) {
-                node.getChild(index)?.let(queue::addLast)
-            }
-        }
-        return null
-    }
-
-    private fun roundedBackground(color: Int, radiusDp: Int) = GradientDrawable().apply {
-        setColor(color)
-        cornerRadius = service.dp(radiusDp).toFloat()
-    }
 }
 
 class ScrollDockTileService : TileService() {
