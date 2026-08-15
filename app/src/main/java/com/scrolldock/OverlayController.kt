@@ -26,7 +26,6 @@ class OverlayController(
     private val commandSink: (ScrollCommand) -> Unit,
     private val continuousStart: (ScrollDirection) -> Unit,
     private val stop: () -> Unit,
-    private val promptToggle: () -> Unit,
 ) {
     private val windowManager = service.getSystemService(WindowManager::class.java)
     private val handler = Handler(Looper.getMainLooper())
@@ -47,8 +46,8 @@ class OverlayController(
         val landscape = service.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         val appPackage = service.currentForegroundPackage()
         val saved = prefs.getPosition(appPackage, landscape)
-        val estimatedHeight = profile.buttonSizeDp * 2 + HANDLE_SIZE_DP + PROMPT_SIZE_DP + 20
-        val initialX = saved.first ?: (screen.right - service.dp(profile.buttonSizeDp + 8))
+        val estimatedHeight = profile.buttonSizeDp * 2 + HANDLE_SIZE_DP + 10
+        val initialX = saved.first ?: (screen.right - service.dp(profile.buttonSizeDp + 4))
         val initialY = saved.second ?: (screen.centerY() - service.dp(estimatedHeight / 2))
         params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -214,13 +213,13 @@ class OverlayController(
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             alpha = profile.opacityPercent / 100f
-            background = roundedBackground(0xE61D2433.toInt(), 14)
-            setPadding(service.dp(3), service.dp(3), service.dp(3), service.dp(3))
+            background = roundedBackground(0xE61D2433.toInt(), 11)
+            setPadding(service.dp(1), service.dp(1), service.dp(1), service.dp(1))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         }
         buttons.clear()
 
-        val handle = control("⋮", "Move ScrollDock", HANDLE_SIZE_DP, 20f).apply {
+        val handle = control("⋮", "Move ScrollDock", HANDLE_SIZE_DP, 18f).apply {
             setOnTouchListener(DragTouchListener())
         }
         container.addView(handle)
@@ -235,21 +234,6 @@ class OverlayController(
         buttons[ScrollCommand.BOTTOM] = superDown
         container.addView(superDown)
 
-        val prompt = control("P", "Quick prompts", PROMPT_SIZE_DP, 14f).apply {
-            setOnClickListener {
-                stop()
-                promptToggle()
-            }
-            setOnLongClickListener {
-                service.startActivity(
-                    Intent(service, QuickPhrasesActivity::class.java)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                )
-                true
-            }
-        }
-        container.addView(prompt)
-
         return container
     }
 
@@ -259,48 +243,18 @@ class OverlayController(
         }
     }
 
-    private fun configureDownButton(button: TextView) {
-        var downAt = 0L
-        var longPressed = false
-        val longPress = Runnable {
-            longPressed = true
-            continuousStart(ScrollDirection.DOWN)
-        }
-        button.setOnTouchListener { _, event ->
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    downAt = event.eventTime
-                    longPressed = false
-                    handler.postDelayed(longPress, LONG_PRESS_MS)
-                    true
-                }
-                MotionEvent.ACTION_UP -> {
-                    handler.removeCallbacks(longPress)
-                    if (longPressed) stop() else if (event.eventTime - downAt < LONG_PRESS_MS) commandSink(ScrollCommand.PAGE_DOWN)
-                    true
-                }
-                MotionEvent.ACTION_CANCEL -> {
-                    handler.removeCallbacks(longPress)
-                    if (longPressed) stop()
-                    true
-                }
-                else -> true
-            }
-        }
-    }
-
     private fun control(text: String, description: String, sizeDp: Int, textSp: Float): TextView = TextView(service).apply {
         this.text = text
         contentDescription = description
         textSize = textSp
         gravity = Gravity.CENTER
         setTextColor(Color.WHITE)
-        background = roundedBackground(0x66FFFFFF, 10)
+        background = roundedBackground(0x66FFFFFF, 9)
         isClickable = true
         isFocusable = true
         layoutParams = LinearLayout.LayoutParams(service.dp(sizeDp), service.dp(sizeDp)).apply {
-            topMargin = service.dp(2)
-            bottomMargin = service.dp(2)
+            topMargin = service.dp(1)
+            bottomMargin = service.dp(1)
         }
     }
 
@@ -496,8 +450,6 @@ class OverlayController(
     }
 
     companion object {
-        private const val HANDLE_SIZE_DP = 28
-        private const val PROMPT_SIZE_DP = 30
-        private const val LONG_PRESS_MS = 450L
+        private const val HANDLE_SIZE_DP = 22
     }
 }
