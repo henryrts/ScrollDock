@@ -32,10 +32,6 @@
             android:exported="false" />
 
         <activity
-            android:name=".QuickPhrasesActivity"
-            android:exported="false" />
-
-        <activity
             android:name=".AiAppsActivity"
             android:exported="false" />
 
