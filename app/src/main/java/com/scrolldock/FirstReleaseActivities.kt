@@ -15,12 +15,10 @@ import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.text.InputFilter
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
-import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Switch
@@ -33,7 +31,6 @@ class FirstReleaseActivity : BaseSettingsActivity() {
     private lateinit var status: TextView
     private lateinit var controlsSwitch: Switch
     private lateinit var aiStatus: TextView
-    private lateinit var phraseStatus: TextView
     private var openedSetup = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -54,7 +51,7 @@ class FirstReleaseActivity : BaseSettingsActivity() {
     private fun buildContent(): View {
         val root = pageRoot()
         root.addView(title("ScrollDock"))
-        root.addView(body("Version ${appVersion()} · Minimal scrolling, prompts and app controls."))
+        root.addView(body("Version ${appVersion()} · Minimal scrolling and app controls."))
 
         root.addView(section("Service"))
         status = cardText("")
@@ -84,14 +81,6 @@ class FirstReleaseActivity : BaseSettingsActivity() {
             startActivity(Intent(this, AiAppsActivity::class.java))
         })
 
-        root.addView(section("Quick prompts"))
-        phraseStatus = body("")
-        root.addView(phraseStatus)
-        root.addView(actionButton("Edit five Quick prompts") {
-            startActivity(Intent(this, QuickPhrasesActivity::class.java))
-        })
-        root.addView(body("Tap the small P button below Super Down to open prompts. Long-press P to edit them."))
-
         root.addView(section("Compatibility diagnostics"))
         root.addView(body("Inspect the current structural scroll target, supported actions, method, keyboard bounds, target signature and last failure without collecting screen text."))
         root.addView(actionButton("Open diagnostics") {
@@ -106,7 +95,7 @@ class FirstReleaseActivity : BaseSettingsActivity() {
         root.addView(
             body(
                 "No Internet permission, analytics, ads, accounts or screen capture. " +
-                    "Quick prompts are stored locally. When you tap a prompt, ScrollDock temporarily reads only the focused editable field so it can insert text without deleting what is already there."
+                    "ScrollDock uses accessibility only for navigation and its selected-app controls."
             )
         )
 
@@ -135,7 +124,6 @@ class FirstReleaseActivity : BaseSettingsActivity() {
             controlsSwitch.isChecked = enabled && prefs.overlayEnabled && !paused
         }
         aiStatus.text = "Enabled apps: ${prefs.selectedPackages().size}\nRecommended: ChatGPT, Claude, Gemini, DeepSeek and Kimi"
-        phraseStatus.text = "Configured prompts: ${features.configuredPhraseCount()} / ${FeaturePrefs.MAX_PHRASES}"
     }
 
     private fun launchSetupWhenRequired() {
@@ -274,59 +262,6 @@ class AiAppsActivity : BaseSettingsActivity() {
         true
     } catch (_: PackageManager.NameNotFoundException) {
         false
-    }
-}
-
-class QuickPhrasesActivity : BaseSettingsActivity() {
-    private lateinit var features: FeaturePrefs
-    private val labelFields = mutableListOf<EditText>()
-    private val textFields = mutableListOf<EditText>()
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        features = FeaturePrefs(this)
-        setContentView(buildContent())
-    }
-
-    private fun buildContent(): View {
-        val root = pageRoot()
-        root.addView(title("Quick prompts"))
-        root.addView(body("Store up to five local prompts. Tap P below Super Down to open them. ScrollDock never presses Send."))
-
-        features.quickPhrases().forEachIndexed { index, phrase ->
-            root.addView(section("Prompt ${index + 1}"))
-            val label = EditText(this).apply {
-                hint = "Short label"
-                setSingleLine(true)
-                filters = arrayOf(InputFilter.LengthFilter(FeaturePrefs.MAX_LABEL_LENGTH))
-                setText(phrase.label.takeIf { phrase.text.isNotBlank() || !it.startsWith("Phrase ") }.orEmpty())
-            }
-            val text = EditText(this).apply {
-                hint = "Prompt text"
-                minLines = 3
-                gravity = Gravity.TOP or Gravity.START
-                filters = arrayOf(InputFilter.LengthFilter(FeaturePrefs.MAX_PHRASE_LENGTH))
-                setText(phrase.text)
-            }
-            labelFields += label
-            textFields += text
-            root.addView(label, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            root.addView(text, ViewGroup.LayoutParams.MATCH_PARENT, dp(120))
-        }
-
-        root.addView(actionButton("Save Quick prompts") {
-            for (index in 0 until FeaturePrefs.MAX_PHRASES) {
-                features.saveQuickPhrase(
-                    index,
-                    labelFields[index].text.toString(),
-                    textFields[index].text.toString(),
-                )
-            }
-            Toast.makeText(this, "Quick prompts saved", Toast.LENGTH_SHORT).show()
-            finish()
-        })
-        root.addView(body("Do not store passwords, authentication codes or highly sensitive personal information."))
-        return scrollPage(root)
     }
 }
 
