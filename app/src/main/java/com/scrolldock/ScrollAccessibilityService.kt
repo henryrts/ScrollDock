@@ -44,14 +44,6 @@ class ScrollAccessibilityService : AccessibilityService(), SharedPreferences.OnS
                 }
                 executor.execute(command)
             },
-            continuousStart = { direction ->
-                captureDiagnostics(direction)
-                DiagnosticBridge.markRunning(
-                    this,
-                    if (direction == ScrollDirection.UP) ScrollCommand.PAGE_UP else ScrollCommand.PAGE_DOWN,
-                )
-                executor.startContinuous(direction)
-            },
             stop = { executor.stop() },
         )
         executor = ScrollCommandExecutor(
